@@ -10,6 +10,7 @@ import redis
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from datetime import datetime
 from getpass import getpass
 from pydantic.types import SecretStr
 from redis_json_dict import RedisJSONDict
@@ -27,7 +28,7 @@ normalized_beamlines = {
 
 
 def sync_experiment(
-    proposal_ids: list(int),
+    proposal_ids: list[int],
     beamline: str | None = None,
     endstation: str | None = None,
     facility: str = "nsls2",
@@ -41,9 +42,9 @@ def sync_experiment(
     beamline = beamline.lower()
     endstation = endstation or env_endstation
     endstation = endstation.lower()
-    proposals_ids = ([str(proposal_id) for proposal_id in proposal_ids],)
-    select_id = select_id or proposal_ids[0]
-    select_id = str(select_id)
+    proposals_ids = [str(proposal_id) for proposal_id in proposal_ids]
+    select_proposal = select_id or proposal_ids[0]
+    select_proposal = str(select_proposal)
 
     if not beamline:
         raise ValueError(
@@ -56,19 +57,19 @@ def sync_experiment(
                 f"Provided proposal ID '{proposal_id}' is not valid.\n "
                 f"A proposal ID must be a 6 character integer."
             )
-    if select_id not in proposal_ids:
+    if select_proposal not in proposal_ids:
         raise ValueError(f"Cannot select a proposal which is not being activated.")
 
     normalized_beamline = normalized_beamlines.get(beamline.lower(), beamline)
     # to-do:make this client use secure Redis (for API key storage)
     redis_client = redis.Redis(
-        host=f"info.{normalized_beeamline}.nsls2.bnl.gov",
+        host=f"info.{normalized_beamline}.nsls2.bnl.gov",
         port=6379,
         db=15,
         decode_responses=True,
     )
 
-    username, password = prompt_for_login()
+    username, password = prompt_for_login(facility, beamline, endstation, proposal_ids)
     try:
         tiled_context = create_tiled_context(
             username, password, normalized_beamline, endstation
@@ -93,7 +94,7 @@ def sync_experiment(
     )
     if not api_key:
         try:
-            api_key_info = create_api_key(redis_client, tiled_context, data_sessions)
+            api_key_info = create_api_key(tiled_context, data_sessions)
         except:
             tiled_context.logout()
             raise  # when cant create key
@@ -112,7 +113,7 @@ def sync_experiment(
     set_api_key(redis_client, normalized_beamline, endstation, data_sessions, api_key)
 
     tiled_context.logout()
-    # activate_proposals(username, select_id, data_sessions, proposals, normalized_beamline, endstation, facility)
+    # activate_proposals(username, select_proposal, data_sessions, proposals, normalized_beamline, endstation, facility)
     # this was a function, but is now inlined below to prevent changing experiment without auth
 
     redis_location = (
@@ -136,7 +137,7 @@ def sync_experiment(
     redis_prefix = f"{redis_location}-" if not redis_ssl else ""
     md = RedisJSONDict(redis_client=md_redis_client, prefix=redis_prefix)
 
-    select_session = "pass-" + select_id
+    select_session = "pass-" + select_proposal
     proposal = proposals[select_proposal]
 
     md["data_sessions_active"] = data_sessions
