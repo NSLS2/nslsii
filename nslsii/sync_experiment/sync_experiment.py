@@ -1,6 +1,7 @@
 import argparse
 import importlib.metadata
 import base64
+import heapq
 import httpx
 import json
 import os
@@ -10,7 +11,7 @@ import redis
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from datetime import datetime
+from datetime import datetime, timezone
 from getpass import getpass
 from pydantic.types import SecretStr
 from redis_json_dict import RedisJSONDict
@@ -39,10 +40,8 @@ def sync_experiment(
 ) -> RedisJSONDict:
     env_beamline, env_endstation = get_beamline_env()
     beamline = beamline or env_beamline
-    beamline = beamline.lower()
     endstation = endstation or env_endstation
-    endstation = endstation.lower()
-    proposals_ids = [str(proposal_id) for proposal_id in proposal_ids]
+    proposal_ids = [str(proposal_id) for proposal_id in proposal_ids]
     select_proposal = select_id or proposal_ids[0]
     select_proposal = str(select_proposal)
 
@@ -58,15 +57,17 @@ def sync_experiment(
                 f"A proposal ID must be a 6 character integer."
             )
     if select_proposal not in proposal_ids:
-        raise ValueError(f"Cannot select a proposal which is not being activated.")
+        raise ValueError("Cannot select a proposal which is not being activated.")
 
+    beamline = beamline.lower()
+    if endstation:
+        endstation = endstation.lower()
     normalized_beamline = normalized_beamlines.get(beamline.lower(), beamline)
     # to-do:make this client use secure Redis (for API key storage)
     redis_client = redis.Redis(
         host=f"info.{normalized_beamline}.nsls2.bnl.gov",
         port=6379,
         db=15,
-        decode_responses=True,
     )
 
     username, password = prompt_for_login(facility, beamline, endstation, proposal_ids)
@@ -81,7 +82,7 @@ def sync_experiment(
     if not proposal_can_be_activated(username, facility, beamline, data_sessions):
         tiled_context.logout()
         raise ValueError(
-            f"You do not have permissions to activate all proposal IDs: ', '.join(proposal_ids)"
+            f"You do not have permissions to activate all proposal IDs: {', '.join(proposal_ids)}"
         )
     try:
         proposals = retrieve_proposals(facility, beamline, proposal_ids)
@@ -90,7 +91,7 @@ def sync_experiment(
         raise  # except if proposal retrieval fails
 
     api_key = get_api_key(
-        redis_client, password, normalized_beamline, endstation, data_sessions
+        redis_client, username, password, normalized_beamline, endstation, data_sessions
     )
     if not api_key:
         try:
@@ -108,9 +109,14 @@ def sync_experiment(
             api_key_info,
         )
         api_key = get_api_key(
-            redis_client, password, normalized_beamline, endstation, data_sessions
+            redis_client,
+            username,
+            password,
+            normalized_beamline,
+            endstation,
+            data_sessions,
         )
-    set_api_key(redis_client, normalized_beamline, endstation, data_sessions, api_key)
+    set_api_key(redis_client, normalized_beamline, endstation, api_key)
 
     tiled_context.logout()
     # activate_proposals(username, select_proposal, data_sessions, proposals, normalized_beamline, endstation, facility)
@@ -140,7 +146,7 @@ def sync_experiment(
     select_session = "pass-" + select_proposal
     proposal = proposals[select_proposal]
 
-    md["data_sessions_active"] = data_sessions
+    md["data_sessions_active"] = list(data_sessions)
     users = proposal.pop("users")
     pi_name = ""
     for user in users:
@@ -284,12 +290,14 @@ def encrypt_api_key(password, api_key):
     """
     salt = os.urandom(16)
     kdf = PBKDF2HMAC(
-        algorithm=hashes.SA256(),
+        algorithm=hashes.SHA256(),
         length=32,
         salt=salt,
-        iteration=1_500_000,
+        iterations=1_500_000,
     )
-    key = base64.urlsafe_b64_encode(kdf.derive(password.get_secret_value()))
+    key = base64.urlsafe_b64encode(
+        kdf.derive(password.get_secret_value().encode("UTF-8"))
+    )
     f = Fernet(key)
     token = f.encrypt(api_key.encode("UTF-8"))
     return token, salt
@@ -304,15 +312,17 @@ def decrypt_api_key(password, salt, api_key_encrypted):
     The number of iterations was taken from Django's current settings.
     """
     kdf = PBKDF2HMAC(
-        algorithm=hashes.SA256(),
+        algorithm=hashes.SHA256(),
         length=32,
         salt=salt,
-        iteration=1_500_000,
+        iterations=1_500_000,
     )
-    key = base64.urlsafe_b64_encode(kdf.derive(password.get_secret_value()))
+    key = base64.urlsafe_b64encode(
+        kdf.derive(password.get_secret_value().encode("UTF-8"))
+    )
     f = Fernet(key)
-    token = f.decrypt(api_key_encrypted.encode("UTF-8"))
-    return token
+    token = f.decrypt(api_key_encrypted)
+    return token.decode("UTF-8")
 
 
 def prompt_for_login(facility, beamline, endstation, proposal_ids):
@@ -322,7 +332,7 @@ def prompt_for_login(facility, beamline, endstation, proposal_ids):
     print(
         f"Attempting to sync experiment for proposal ID(s) {(', ').join(proposal_ids)}."
     )
-    print(f"Please login with your BNL credentials.")
+    print("Please login with your BNL credentials.")
     username = input("Username: ")
     password = SecretStr(getpass(prompt="Password: "))
     return username, password
@@ -391,7 +401,7 @@ def create_tiled_context(username, password, beamline, endstation):
 
 
 def create_api_key(tiled_context, data_sessions):
-    tags = [data_session for data_session in data_sessions]
+    access_tags = [data_session for data_session in data_sessions]
     expires_in = "7d"
     hostname = os.getenv("HOSTNAME", "unknown host")
     note = f"Auto-generated by sync-experiment from {hostname}"
@@ -404,20 +414,21 @@ def create_api_key(tiled_context, data_sessions):
     return info
 
 
-def set_api_key(redis_client, beamline, endstation, data_sessions, api_key):
+def set_api_key(redis_client, beamline, endstation, api_key):
     """
     Use to set the active API key in Redis.
 
     The active API key is stored with key:
-    <beamline tla>-<endstation acronym>-<username>-<data sessions>-apikey-active
+    <beamline tla>-<endstation acronym>-apikey-active
 
     """
-    redis_prefix = f"{beamline}-{endstation}" if endstation else f"{beamline}"
-    redis_prefix = f"{redis_prefix}-{username}-{data_sessions.join('-')}-apikey"
+    redis_prefix = (
+        f"{beamline}-{endstation}-apikey" if endstation else f"{beamline}-apikey"
+    )
     redis_client.set(f"{redis_prefix}-active", api_key)
 
 
-def get_api_key(redis_client, password, beamline, endstation, data_sessions):
+def get_api_key(redis_client, username, password, beamline, endstation, data_sessions):
     """
     Retrieve an API key from Redis.
     Query Redis for key information, decrypt the API key if found,
@@ -426,26 +437,32 @@ def get_api_key(redis_client, password, beamline, endstation, data_sessions):
 
     """
     redis_prefix = f"{beamline}-{endstation}" if endstation else f"{beamline}"
-    redis_prefix = f"{redis_prefix}-{username}-{data_sessions.join('-')}-apikey"
+    redis_prefix = (
+        f"{redis_prefix}-{username}-"
+        f"{'-'.join(data_session.replace('-', '') for data_session in data_sessions)}"
+        f"-apikey"
+    )
 
     api_key_cached = {}
+    cursor = 0
     while True:
         cursor, keys = redis_client.scan(cursor=cursor, match=f"{redis_prefix}*")
         if keys:
             values = redis_client.mget(keys)
+            keys = [key.decode("UTF-8") for key in keys]
             api_key_cached.update(dict(zip(keys, values)))
         if cursor == 0:
             break
 
-    if api_key_info:
-        expires = datetime.fromisoformat(api_key_info[f"{redis_prefix}-expires"])
-        now = datetime.now().replace(microsecond=0).isoformat()
+    if api_key_cached:
+        expires = datetime.fromisoformat(
+            api_key_cached[f"{redis_prefix}-expires"].decode("UTF-8")
+        )
+        now = datetime.now(timezone.utc)
         if expires > now:
             salt = api_key_cached[f"{redis_prefix}-salt"]
             api_key_encrypted = api_key_cached[f"{redis_prefix}-encrypted"]
-            api_key = decrypt_api_key(
-                password.get_secret_value(), salt, api_key_encrypted
-            )
+            api_key = decrypt_api_key(password, salt, api_key_encrypted)
         else:
             api_key = None
     else:
@@ -475,7 +492,11 @@ def cache_api_key(
 
     """
     redis_prefix = f"{beamline}-{endstation}" if endstation else f"{beamline}"
-    redis_prefix = f"{redis_prefix}-{username}-{data_sessions.join('-')}-apikey"
+    redis_prefix = (
+        f"{redis_prefix}-{username}-"
+        f"{'-'.join(data_session.replace('-', '') for data_session in data_sessions)}"
+        f"-apikey"
+    )
 
     MAX_ENTRIES = 5
     COUNT_PER_ENTRY = 4
@@ -490,7 +511,10 @@ def cache_api_key(
             values = redis_client.mget(keys)
             expiry_dates.extend(
                 [
-                    (datetime.fromisoformat(v), k.removesuffix("-expires"))
+                    (
+                        datetime.fromisoformat(v.decode("UTF-8")),
+                        k.decode("UTF-8").removesuffix("-expires"),
+                    )
                     for k, v in zip(keys, values)
                 ]
             )
@@ -498,7 +522,7 @@ def cache_api_key(
             break
 
     heapq.heapify(expiry_dates)
-    while (length() - COUNT_NON_ENTRIES) / COUNTS_PER_ENTRY >= MAX_ENTRIES:
+    while (length() - COUNT_NON_ENTRIES) / COUNT_PER_ENTRY >= MAX_ENTRIES:
         expiry_prefix = heapify.heappop(expiry_heap)[1]
         cursor = 0
         while True:
@@ -508,13 +532,11 @@ def cache_api_key(
             if cursor == 0:
                 break
 
-    encrypted_key, salt = encrypt_api_key(
-        password.get_secret_value(), api_key_info[secret]
-    )
-    redis_client.set(f"{redis_prefix}-expires", api_key_info[expiration_time])
+    encrypted_key, salt = encrypt_api_key(password, api_key_info["secret"])
     redis_client.set(
-        f"{redis_prefix}-created", datetime.now().replace(microsecond=0).isoformat()
+        f"{redis_prefix}-expires", api_key_info["expiration_time"].isoformat()
     )
+    redis_client.set(f"{redis_prefix}-created", datetime.now(timezone.utc).isoformat())
     redis_client.set(f"{redis_prefix}-encrypted", encrypted_key)
     redis_client.set(f"{redis_prefix}-salt", salt)
 
@@ -582,15 +604,15 @@ def retrieve_proposals(facility, beamline, proposal_ids):
     num_proposals = len(proposal_ids)
     proposals = {}
     for proposal_id in proposal_ids:
-        proposal_response = nslsii_api_client.get(f"/v1/proposal/{proposal_id}")
+        proposal_response = facility_api_client.get(f"/v1/proposal/{proposal_id}")
         proposal_response.raise_for_status()
         proposal = proposal_response.json()["proposal"]
-        if beamline.upper() not in proposal_data["instruments"]:
+        if beamline.upper() not in proposal["instruments"]:
             raise ValueError(
                 f"Proposal {proposal_id} is not at this beamline ({beamline.upper()})."
                 f"This proposal is at the following beamline(s): {', '.join(proposal['instruments'])}."
             )
-        is_commissioning_proposal = proposal_id in commissioning_rpoposals
+        is_commissioning_proposal = proposal_id in commissioning_proposals
         if num_proposals > 1 and is_commissioning_proposal:
             raise ValueError(
                 f"Cannot activate multiple experiments alongside a commmissioning proposal."
@@ -606,8 +628,8 @@ def retrieve_proposals(facility, beamline, proposal_ids):
 
 
 def get_beamline_env():
-    os.getenv("BEAMLINE_ACRONYM").lower()
-    os.getenv("ENDSTATION_ACRONYM").lower()
+    beamline = os.getenv("BEAMLINE_ACRONYM")
+    endstation = os.getenv("ENDSTATION_ACRONYM")
     return beamline, endstation
 
 
