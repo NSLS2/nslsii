@@ -328,13 +328,13 @@ def decrypt_api_key(password, salt, api_key_encrypted):
 
 
 def prompt_for_login(facility, beamline, endstation, proposal_ids):
-    print(f"Welcome to the {beamline.upper()} beamline at {facility.upper()}!")
+    print(f"\nWelcome to the {beamline.upper()} beamline at {facility.upper()}!\n")
     if endstation:
-        print(f"This is the {endstation.upper()} endstation.")
+        print(f"This is the {endstation.upper()} endstation.\n")
     print(
-        f"Attempting to sync experiment for proposal ID(s) {(', ').join(proposal_ids)}."
+        f"Attempting to sync experiment for proposal ID(s) {(', ').join(proposal_ids)}.\n"
     )
-    print("Please login with your BNL credentials.")
+    print("Please login with your BNL credentials (you may receive a Duo prompt):")
     username = input("Username: ")
     password = SecretStr(getpass(prompt="Password: "))
     return username, password
