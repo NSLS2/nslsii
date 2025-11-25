@@ -529,12 +529,14 @@ def cache_api_key(
 
     heapq.heapify(expiry_dates)
     while (length() - COUNT_NON_ENTRIES) / COUNT_PER_ENTRY >= MAX_ENTRIES:
-        expiry_prefix = heapify.heappop(expiry_heap)[1]
+        expiry_prefix = heapq.heappop(expiry_dates)[1]
         cursor = 0
         while True:
-            cursor, keys = r.scan(cursor=cursor, match=f"{expiry_prefix}*", count=10)
+            cursor, keys = redis_client.scan(
+                cursor=cursor, match=f"{expiry_prefix}*", count=10
+            )
             if keys:
-                r.delete(*keys)
+                redis_client.delete(*keys)
             if cursor == 0:
                 break
 
