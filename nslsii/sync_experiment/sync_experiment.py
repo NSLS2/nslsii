@@ -33,7 +33,7 @@ def sync_experiment(
     beamline: str | None = None,
     endstation: str | None = None,
     facility: str = "nsls2",
-    select_id: int | None = None,
+    activate_id: int | None = None,
     redis_db: int = 0,
     redis_ssl: bool = False,
     verbose: bool = False,
@@ -42,8 +42,8 @@ def sync_experiment(
     beamline = beamline or env_beamline
     endstation = endstation or env_endstation
     proposal_ids = [str(proposal_id) for proposal_id in proposal_ids]
-    select_proposal = select_id or proposal_ids[0]
-    select_proposal = str(select_proposal)
+    activate_proposal = activate_id or proposal_ids[0]
+    activate_proposal = str(activate_proposal)
 
     if not beamline:
         raise ValueError(
@@ -56,8 +56,8 @@ def sync_experiment(
                 f"Provided proposal ID '{proposal_id}' is not valid.\n "
                 f"A proposal ID must be a 6 character integer."
             )
-    if select_proposal not in proposal_ids:
-        raise ValueError("Cannot select a proposal which is not being activated.")
+    if activate_proposal not in proposal_ids:
+        raise ValueError("Cannot activate a proposal which is not being authorized.")
 
     beamline = beamline.lower()
     if endstation:
@@ -79,10 +79,10 @@ def sync_experiment(
         raise  # except if login fails
 
     data_sessions = {"pass-" + proposal_id for proposal_id in proposal_ids}
-    if not proposal_can_be_activated(username, facility, beamline, data_sessions):
+    if not proposal_can_be_authorized(username, facility, beamline, data_sessions):
         tiled_context.logout()
         raise ValueError(
-            f"You do not have permissions to activate all proposal IDs: {', '.join(proposal_ids)}"
+            f"You do not have permissions to authorize all proposal IDs: {', '.join(proposal_ids)}"
         )
     try:
         proposals = retrieve_proposals(facility, beamline, proposal_ids)
@@ -119,8 +119,6 @@ def sync_experiment(
     set_api_key(redis_client, normalized_beamline, endstation, api_key)
 
     tiled_context.logout()
-    # activate_proposals(username, select_proposal, data_sessions, proposals, normalized_beamline, endstation, facility)
-    # this was a function, but is now inlined below to prevent changing experiment without auth
 
     redis_location = (
         f"{normalized_beamline}-{endstation}" if endstation else f"{normalized_beamline}"
@@ -143,10 +141,10 @@ def sync_experiment(
     redis_prefix = f"{redis_location}-" if not redis_ssl else ""
     md = RedisJSONDict(redis_client=md_redis_client, prefix=redis_prefix)
 
-    select_session = "pass-" + select_proposal
-    proposal = proposals[select_proposal]
+    activate_session = "pass-" + activate_proposal
+    proposal = proposals[activate_proposal]
 
-    md["data_sessions_active"] = list(data_sessions)
+    md["data_sessions_authorized"] = list(data_sessions)
     users = proposal.pop("users")
     pi_name = ""
     for user in users:
@@ -154,14 +152,14 @@ def sync_experiment(
             pi_name = (
                 f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
             )
-    md["data_session"] = select_session  # e.g. "pass-123456"
+    md["data_session"] = activate_session  # e.g. "pass-123456"
     md["username"] = username
     md["start_datetime"] = datetime.now().isoformat()
     # tiled-access-tags used by bluesky-tiled-writer, not saved to metadata
-    md["tiled_access_tags"] = list(select_session)
+    md["tiled_access_tags"] = list(activate_session)
     md["cycle"] = (
         "commissioning"
-        if select_proposal in get_commissioning_proposals(facility, beamline)
+        if activate_proposal in get_commissioning_proposals(facility, beamline)
         else get_current_cycle(facility)
     )
     md["proposal"] = {
@@ -172,9 +170,11 @@ def sync_experiment(
     }
 
     print(
-        f"Activated experiments with data sessions {', '.join(md['data_sessions_active'])}\n"
+        f"Authorized experiments with data sessions {', '.join(md['data_sessions_authorized'])}\n"
     )
-    print(f"Switched to experiment {md['data_session']} by {md['username']}.")
+    print(
+        f"Activated experiment with data session {md['data_session']} by {md['username']}."
+    )
 
     if verbose:
         print(md)
@@ -185,14 +185,14 @@ def sync_experiment(
 def switch_proposal(
     username, proposal_id, beamline, endstation=None, facility="nsls2", redis_db=0, redis_ssl=False, verbose=False,
 ) -> RedisJSONDict:
-    """Swith the loaded experiment (proposal) information at the beamline.
+    """Switch the active experiment (proposal) at the beamline.
 
     Parameters
     ----------
     username: str
         the current user's username
     proposal_id: int or str
-        the ID number of the proposal to load
+        the ID number of the proposal to activate
     beamline: str
         the TLA of the beamline from which the experiment is running, not case-sensitive
     endstation : str or None (optional)
@@ -228,28 +228,28 @@ def switch_proposal(
     redis_prefix = f"{redis_location}-" if not redis_ssl else ""
     md = RedisJSONDict(redis_client=md_redis_client, prefix=redis_prefix)
 
-    select_proposal = str(proposal_id)
-    select_session = "pass-" + select_proposal
-    data_sessions_active = md.get("data_sessions_active")
-    if not data_sessions_active:
+    activate_proposal = str(proposal_id)
+    activate_session = "pass-" + activate_proposal
+    data_sessions_authorized = md.get("data_sessions_authorized")
+    if not data_sessions_authorized:
         raise ValueError(
-            "There are no currently active data sessions (proposals).\n"
-            "Please run sync-experiment before attempting to switch the loaded proposal."
+            "There are no currently authorized data sessions (proposals).\n"
+            "Please run sync-experiment before attempting to switch the active proposal."
         )
     if not username == md.get("username"):
         raise ValueError(
-            "The currently active data sessions (proposals) were activated by a different user.\n"
-            "Please re-run sync-experiment to authenticate as different user."
+            "The currently authorized data sessions (proposals) were authorized by a different user.\n"
+            "Please re-run sync-experiment to authorize as the intended user."
         )
-    if select_session not in data_sessions_active:
+    if activate_session not in data_sessions_authorized:
         raise ValueError(
-            f"Cannot switch to proposal which has not been activated.\n"
-            f"The activated data sessions are: {', '.join(data_sessions_active)}\n"
-            f"To activate different proposals, re-run sync-experiment."
+            f"Cannot switch to proposal which has not been authorized.\n"
+            f"The authorized data sessions are: {', '.join(data_sessions_authorized)}\n"
+            f"To authorize different proposals, re-run sync-experiment."
         )
 
-    proposals = retrieve_proposals(facility, beamline, [select_proposal])
-    proposal = proposals[select_proposal]
+    proposals = retrieve_proposals(facility, beamline, [activate_proposal])
+    proposal = proposals[activate_proposal]
 
     users = proposal.pop("users")
     pi_name = ""
@@ -258,14 +258,14 @@ def switch_proposal(
             pi_name = (
                 f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
             )
-    md["data_session"] = select_session  # e.g. "pass-123456"
+    md["data_session"] = activate_session  # e.g. "pass-123456"
     md["username"] = username
     md["start_datetime"] = datetime.now().isoformat()
     # tiled-access-tags used by bluesky-tiled-writer, not saved to metadata
-    md["tiled_access_tags"] = list(select_session)
+    md["tiled_access_tags"] = list(activate_session)
     md["cycle"] = (
         "commissioning"
-        if select_proposal in get_commissioning_proposals(facility, beamline)
+        if activate_proposal in get_commissioning_proposals(facility, beamline)
         else get_current_cycle(facility)
     )
     md["proposal"] = {
@@ -275,7 +275,9 @@ def switch_proposal(
         "pi_name": pi_name,
     }
 
-    print(f"Switched to experiment {md['data_session']} by {md['username']}.")
+    print(
+        f"Switched to experiment wihh data session {md['data_session']} by {md['username']}."
+    )
 
     return md
 
@@ -340,7 +342,7 @@ def prompt_for_login(facility, beamline, endstation, proposal_ids):
 
 def create_tiled_context(username, password, beamline, endstation):
     """
-    Createa new Tiled context and authenticate.
+    Create a new Tiled context and authenticate.
 
     Loads the beamline Tiled profile, instantiates the new context,
     selects an AuthN provider, attempts to retrieve tokens via password_grant,
@@ -565,9 +567,9 @@ def get_commissioning_proposals(facility, beamline):
     return commissioning_proposals
 
 
-def proposal_can_be_activated(username, facility, beamline, data_sessions):
+def proposal_can_be_authorized(username, facility, beamline, data_sessions):
     """
-    Check that the user can activate the requested proposals,
+    Check that the user can authorize the requested proposals,
     given their data_sessions.
 
     Activation will be allowed if the user has facility or
@@ -583,7 +585,7 @@ def proposal_can_be_activated(username, facility, beamline, data_sessions):
     user_access_response.raise_for_status()
     user_access = user_access_response.json()
 
-    can_activate = (
+    can_authorize = (
         facility.lower() in user_access["facility_all_access"]
         or beamline.lower() in user_access["beamline_all_access"]
         or all(
@@ -591,21 +593,21 @@ def proposal_can_be_activated(username, facility, beamline, data_sessions):
             for data_session in data_sessions
         )
     )
-    return can_activate
+    return can_authorize
 
 
 def retrieve_proposals(facility, beamline, proposal_ids):
     """
-    Retrieve the data for the proposals that are being activated.
+    Retrieve the data for the proposals that are being authorized.
     This is also a validation step, ensuring that all the
     reequested proposals match the beamline. Without this validation,
     access could be granted to the wrong proposals.
 
     In the future, this should also match proposals by facility as well.
 
-    If multiple proposals are to be activated, they must all be allocated
+    If multiple proposals are to be authorized, they must all be allocated
     for the same (current) cycle. For commissioning proposals, only one proposal
-    can be activated at a time.
+    can be authorized at a time.
     """
     current_cycle = get_current_cycle(facility)
     commissioning_proposals = get_commissioning_proposals(facility, beamline)
@@ -623,7 +625,7 @@ def retrieve_proposals(facility, beamline, proposal_ids):
         is_commissioning_proposal = proposal_id in commissioning_proposals
         if num_proposals > 1 and is_commissioning_proposal:
             raise ValueError(
-                f"Cannot activate multiple experiments alongside a commmissioning proposal."
+                f"Cannot authorize multiple experiments alongside a commmissioning proposal."
                 f"Proposal {proposal_id} is a commissioning proposal."
             )
         if not is_commissioning_proposal and current_cycle not in proposal["cycles"]:
@@ -686,7 +688,7 @@ def main():
         dest="proposals",
         nargs="+",
         type=int,
-        help="The proposal ID for the experiment",
+        help="The proposal ID(s) for the experiment",
         required=True,
     )
     parser.add_argument(
@@ -704,10 +706,10 @@ def main():
     )
     parser.add_argument(
         "-s",
-        "--select",
-        dest="select",
+        "--activate",
+        dest="activate",
         type=int,
-        help="The proposal ID to select and load, defaults to the first in the proposals list.",
+        help="The ID of the proposal to activate, defaults to the first in the proposals list.",
         required=False,
     )
     parser.add_argument("-v", "--verbose", action=argparse.BooleanOptionalAction)
@@ -718,7 +720,7 @@ def main():
         beamline=args.beamline,
         endstation=args.endstation,
         proposal_ids=args.proposals,
-        select_id=args.select,
+        activate_id=args.activate,
         verbose=args.verbose,
         redis_db=args.redis_db,
         redis_ssl=args.redis_ssl,
