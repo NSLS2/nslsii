@@ -8,7 +8,7 @@ import os
 import re
 import redis
 
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from datetime import datetime, timezone
@@ -433,8 +433,10 @@ def get_api_key(redis_client, username, password, beamline, endstation, data_ses
     """
     Retrieve an API key from Redis.
     Query Redis for key information, decrypt the API key if found,
-    delete the key if it is expired, and finally return the key
+    ignore the key if it is expired, and finally return the key
     if it is still fresh.
+    Failure to decrypt (e.g. a changed password) will also cause
+    existing keys to be ignored.
 
     """
     redis_prefix = f"{beamline}-{endstation}" if endstation else f"{beamline}"
@@ -463,7 +465,10 @@ def get_api_key(redis_client, username, password, beamline, endstation, data_ses
         if expires > now:
             salt = api_key_cached[f"{redis_prefix}-salt"]
             api_key_encrypted = api_key_cached[f"{redis_prefix}-encrypted"]
-            api_key = decrypt_api_key(password, salt, api_key_encrypted)
+            try:
+                api_key = decrypt_api_key(password, salt, api_key_encrypted)
+            except InvalidToken:
+                api_key = None
         else:
             api_key = None
     else:
