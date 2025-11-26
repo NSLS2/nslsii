@@ -80,7 +80,7 @@ def sync_experiment(
         raise  # except if login fails
 
     data_sessions = {"pass-" + proposal_id for proposal_id in proposal_ids}
-    if not proposal_can_be_authorized(username, facility, beamline, data_sessions):
+    if not proposals_can_be_authorized(username, facility, beamline, data_sessions):
         tiled_context.logout()
         raise ValueError(
             f"You do not have permissions to authorize all proposal IDs: {', '.join(proposal_ids)}"
@@ -660,7 +660,7 @@ def get_commissioning_proposals(facility, beamline):
     return commissioning_proposals
 
 
-def proposal_can_be_authorized(username, facility, beamline, data_sessions):
+def proposals_can_be_authorized(username, facility, beamline, data_sessions):
     """
     Check that the user can authorize the requested proposals,
     given their data_sessions.
