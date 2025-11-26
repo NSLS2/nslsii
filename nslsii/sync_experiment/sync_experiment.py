@@ -253,8 +253,8 @@ def unsync_experiment(
 
 
 def switch_proposal(
-    username: str,
     proposal_id: int | str,
+    username: str | None = None,
     facility: str = "nsls2",
     beamline: str | None = None,
     endstation: str | None = None,
@@ -266,10 +266,10 @@ def switch_proposal(
 
     Parameters
     ----------
-    username: str
-        the current user's username
     proposal_id: int or str
         the ID number of the proposal to activate
+    username: str or None (optional)
+        the current user's username - will prompt if no provided.
     facility: str (optional)
         the facility that the beamline belongs to (defaults to "nsls2")
     beamline: str or None (optional)
@@ -296,6 +296,7 @@ def switch_proposal(
     if endstation:
         endstation = endstation.lower()
     normalized_beamline = normalized_beamlines.get(beamline.lower(), beamline.lower())
+    username = username or input("Enter your username: ")
 
     redis_location = (
         f"{normalized_beamline}-{endstation}" if endstation else f"{normalized_beamline}"
@@ -774,14 +775,17 @@ def main():
         default=0,
         help="Redis database index",
     )
-    parser.add_argument(
+
+    # Mutually exclusive modes: sync (proposals+activate), switch, unsync
+    modes_group = parser.add_mutually_exclusive_group(required=True)
+
+    modes_group.add_argument(
         "-p",
         "--proposals",
         dest="proposals",
         nargs="+",
         type=int,
-        help="The proposal ID(s) for the experiment",
-        required=True,
+        help="The proposal ID(s) to authorize for the experiment",
     )
     parser.add_argument(
         "-S",
@@ -804,33 +808,52 @@ def main():
         help="The ID of the proposal to activate, defaults to the first in the proposals list.",
         required=False,
     )
-    parser.add_argument(
+    modes_group.add_argument(
+        "-s",
+        "--switch",
+        dest="switch",
+        type=int,
+        help="Switch the active proposal to this ID. The proposal must already be authorized.",
+    )
+    modes_group.add_argument(
         "-u",
         "--unsync",
         dest="unsync",
         help="Unsync experiment - deauthorize all proposals and deactivate the experiment.",
-        required=False,
         action=argparse.BooleanOptionalAction,
     )
     parser.add_argument("-v", "--verbose", action=argparse.BooleanOptionalAction)
     args = parser.parse_args()
 
-    if not args.unsync:
+    if args.activate is not None and args.proposals is None:
+        parser.error("--activate can only be used when --proposals is provided")
+
+    if args.unsync:
+        unsync_experiment(
+            facility=args.facility,
+            beamline=args.beamline,
+            endstation=args.endstation,
+            verbose=args.verbose,
+            redis_db=args.redis_db,
+            redis_ssl=args.redis_ssl,
+        )
+    elif args.switch is not None:
+        switch_proposal(
+            facility=args.facility,
+            beamline=args.beamline,
+            endstation=args.endstation,
+            proposal_id=args.switch,
+            verbose=args.verbose,
+            redis_db=args.redis_db,
+            redis_ssl=args.redis_ssl,
+        )
+    else:
         sync_experiment(
             facility=args.facility,
             beamline=args.beamline,
             endstation=args.endstation,
             proposal_ids=args.proposals,
             activate_id=args.activate,
-            verbose=args.verbose,
-            redis_db=args.redis_db,
-            redis_ssl=args.redis_ssl,
-        )
-    else:
-        unsync_experiment(
-            facility=args.facility,
-            beamline=args.beamline,
-            endstation=args.endstation,
             verbose=args.verbose,
             redis_db=args.redis_db,
             redis_ssl=args.redis_ssl,
