@@ -29,11 +29,11 @@ normalized_beamlines = {
 
 
 def sync_experiment(
-    proposal_ids: list[int],
+    proposal_ids: list[int | str],
+    activate_id: int | str | None = None,
+    facility: str = "nsls2",
     beamline: str | None = None,
     endstation: str | None = None,
-    facility: str = "nsls2",
-    activate_id: int | None = None,
     redis_db: int = 0,
     redis_ssl: bool = False,
     verbose: bool = False,
@@ -63,8 +63,9 @@ def sync_experiment(
     if endstation:
         endstation = endstation.lower()
     normalized_beamline = normalized_beamlines.get(beamline.lower(), beamline)
+
     # to-do:make this client use secure Redis (for API key storage)
-    redis_client = redis.Redis(
+    apikey_redis_client = redis.Redis(
         host=f"info.{normalized_beamline}.nsls2.bnl.gov",
         port=6379,
         db=15,
@@ -91,16 +92,23 @@ def sync_experiment(
         raise  # except if proposal retrieval fails
 
     api_key = get_api_key(
-        redis_client, username, password, normalized_beamline, endstation, data_sessions
+        apikey_redis_client,
+        username,
+        password,
+        normalized_beamline,
+        endstation,
+        data_sessions,
     )
     if not api_key:
         try:
-            api_key_info = create_api_key(tiled_context, data_sessions, beamline)
+            api_key_info = create_api_key(
+                tiled_context, data_sessions, normalized_beamline
+            )
         except:
             tiled_context.logout()
             raise  # when cant create key
         cache_api_key(
-            redis_client,
+            apikey_redis_client,
             username,
             password,
             normalized_beamline,
@@ -109,14 +117,14 @@ def sync_experiment(
             api_key_info,
         )
         api_key = get_api_key(
-            redis_client,
+            apikey_redis_client,
             username,
             password,
             normalized_beamline,
             endstation,
             data_sessions,
         )
-    set_api_key(redis_client, normalized_beamline, endstation, api_key)
+    set_api_key(apikey_redis_client, normalized_beamline, endstation, api_key)
 
     tiled_context.logout()
 
@@ -182,8 +190,77 @@ def sync_experiment(
     return md
 
 
+def unsync_experiment(
+    facility: str = "nsls2",
+    beamline: str | None = None,
+    endstation: str | None = None,
+    verbose: bool = False,
+) -> RedisJSONDict:
+    env_beamline, env_endstation = get_beamline_env()
+    beamline = beamline or env_beamline
+    endstation = endstation or env_endstation
+
+    if not beamline:
+        raise ValueError(
+            "No beamline provided! Please provide a beamline argument, "
+            "or set the 'BEAMLINE_ACRONYM' environment variable."
+        )
+
+    beamline = beamline.lower()
+    if endstation:
+        endstation = endstation.lower()
+    normalized_beamline = normalized_beamlines.get(beamline.lower(), beamline)
+    apikey_redis_client = redis.Redis(
+        host=f"info.{normalized_beamline}.nsls2.bnl.gov",
+        port=6379,
+        db=15,
+    )
+
+    md_redis_client = redis.Redis(host=f"info.{normalized_beamline}.nsls2.bnl.gov")
+    md_redis_prefix = (
+        f"{normalized_beamline}-{endstation}-"
+        if endstation
+        else f"{normalized_beamline}-"
+    )
+    md = RedisJSONDict(redis_client=md_redis_client, prefix=md_redis_prefix)
+
+    set_api_key(apikey_redis_client, normalized_beamline, endstation, "")
+    data_sessions_deauthorized = md["data_sessions_authorized"]
+    md["data_sessions_authorized"] = list()
+    data_session = md["data_session"]
+    md["data_session"] = ""
+    username = md["username"]
+    md["username"] = ""
+    md["start_datetime"] = ""
+    md["tiled_access_tags"] = list()
+    md["cycle"] = ""
+    md["proposal"] = {
+        "proposal_id": "",
+        "title": "",
+        "type": "",
+        "pi_name": "",
+    }
+
+    print(
+        f"Deauthorized experiments with data sessions {', '.join(data_sessions_deauthorized)}\n"
+    )
+    print(f"Deactivated experiment with data session {data_session} by {username}.")
+
+    if verbose:
+        print(json.dumps(md, indent=2))
+
+    return md
+
+
 def switch_proposal(
-    username, proposal_id, beamline, endstation=None, facility="nsls2", redis_db=0, redis_ssl=False, verbose=False,
+    username: str,
+    proposal_id: int | str,
+    facility: str = "nsls2",
+    beamline: str | None = None,
+    endstation: str | None = None,
+    verbose: bool = False,
+    redis_db: int = 0,
+    redis_ssl: bool = False,
 ) -> RedisJSONDict:
     """Switch the active experiment (proposal) at the beamline.
 
@@ -193,20 +270,33 @@ def switch_proposal(
         the current user's username
     proposal_id: int or str
         the ID number of the proposal to activate
-    beamline: str
+    facility: str (optional)
+        the facility that the beamline belongs to (defaults to "nsls2")
+    beamline: str or None (optional)
         the TLA of the beamline from which the experiment is running, not case-sensitive
     endstation : str or None (optional)
         the endstation at the beamline from which the experiment is running, not case-sensitive
-    facility: str (optional)
-        the facility that the beamline belongs to (defaults to "nsls2")
 
     Returns
     -------
     md : RedisJSONDict
         The updated metadata dictionary
     """
-    beamline = normalized_beamlines.get(beamline.lower(), beamline.lower())
-    endstation = endstation.lower()
+    env_beamline, env_endstation = get_beamline_env()
+    beamline = beamline or env_beamline
+    endstation = endstation or env_endstation
+
+    if not beamline:
+        raise ValueError(
+            "No beamline provided! Please provide a beamline argument, "
+            "or set the 'BEAMLINE_ACRONYM' environment variable."
+        )
+
+    beamline = beamline.lower()
+    if endstation:
+        endstation = endstation.lower()
+    normalized_beamline = normalized_beamlines.get(beamline.lower(), beamline.lower())
+
     redis_location = (
         f"{normalized_beamline}-{endstation}" if endstation else f"{normalized_beamline}"
     )
@@ -712,16 +802,34 @@ def main():
         help="The ID of the proposal to activate, defaults to the first in the proposals list.",
         required=False,
     )
+    parser.add_argument(
+        "-u",
+        "--unsync",
+        dest="unsync",
+        help="Unsync experiment - deauthorize all proposals and deactivate the experiment.",
+        required=False,
+        action=argparse.BooleanOptionalAction,
+    )
     parser.add_argument("-v", "--verbose", action=argparse.BooleanOptionalAction)
     args = parser.parse_args()
 
-    sync_experiment(
-        facility=args.facility,
-        beamline=args.beamline,
-        endstation=args.endstation,
-        proposal_ids=args.proposals,
-        activate_id=args.activate,
-        verbose=args.verbose,
-        redis_db=args.redis_db,
-        redis_ssl=args.redis_ssl,
-    )
+    if not args.unsync:
+        sync_experiment(
+            facility=args.facility,
+            beamline=args.beamline,
+            endstation=args.endstation,
+            proposal_ids=args.proposals,
+            activate_id=args.activate,
+            verbose=args.verbose,
+            redis_db=args.redis_db,
+            redis_ssl=args.redis_ssl,
+        )
+    else:
+        unsync_experiment(
+            facility=args.facility,
+            beamline=args.beamline,
+            endstation=args.endstation,
+            verbose=args.verbose,
+            redis_db=args.redis_db,
+            redis_ssl=args.redis_ssl,
+        )
