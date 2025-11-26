@@ -531,11 +531,12 @@ def get_api_key(redis_client, username, password, beamline, endstation, data_ses
     existing keys to be ignored.
 
     """
+    data_sessions_sanitized = sorted(
+        data_session.replace("-", "") for data_session in data_sessions
+    )
     redis_prefix = f"{beamline}-{endstation}" if endstation else f"{beamline}"
     redis_prefix = (
-        f"{redis_prefix}-{username}-"
-        f"{'-'.join(data_session.replace('-', '') for data_session in data_sessions)}"
-        f"-apikey"
+        f"{redis_prefix}-{username}-{'-'.join(data_sessions_sanitized)}-apikey"
     )
 
     api_key_cached = {}
@@ -589,11 +590,12 @@ def cache_api_key(
     <prefix>-salt      : the salt used for encryption
 
     """
+    data_sessions_sanitized = sorted(
+        data_session.replace("-", "") for data_session in data_sessions
+    )
     redis_prefix = f"{beamline}-{endstation}" if endstation else f"{beamline}"
     redis_prefix = (
-        f"{redis_prefix}-{username}-"
-        f"{'-'.join(data_session.replace('-', '') for data_session in data_sessions)}"
-        f"-apikey"
+        f"{redis_prefix}-{username}-{'-'.join(data_sessions_sanitized)}-apikey"
     )
 
     MAX_ENTRIES = 5
