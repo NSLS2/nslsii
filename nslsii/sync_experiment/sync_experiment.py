@@ -22,10 +22,20 @@ from nslsii.utils import open_redis_client
 
 
 facility_api_client = httpx.Client(base_url="https://api.nsls2.bnl.gov")
-normalized_beamlines = {
-    "sst1": "sst",
-    "sst2": "sst",
-}
+
+
+class KeyRemapper(dict):
+    def __missing__(self, key):
+        self[key] = key
+        return key
+
+
+normalized_beamlines = KeyRemapper(
+    {
+        "sst1": "sst",
+        "sst2": "sst",
+    }
+)
 
 
 def sync_experiment(
@@ -62,7 +72,7 @@ def sync_experiment(
     beamline = beamline.lower()
     if endstation:
         endstation = endstation.lower()
-    normalized_beamline = normalized_beamlines.get(beamline, beamline)
+    normalized_beamline = normalized_beamlines[beamline]
 
     # to-do:make this client use secure Redis (for API key storage)
     apikey_redis_client = redis.Redis(
@@ -209,7 +219,7 @@ def unsync_experiment(
     beamline = beamline.lower()
     if endstation:
         endstation = endstation.lower()
-    normalized_beamline = normalized_beamlines.get(beamline, beamline)
+    normalized_beamline = normalized_beamlines[beamline]
     apikey_redis_client = redis.Redis(
         host=f"info.{normalized_beamline}.nsls2.bnl.gov",
         port=6379,
@@ -295,7 +305,7 @@ def switch_proposal(
     beamline = beamline.lower()
     if endstation:
         endstation = endstation.lower()
-    normalized_beamline = normalized_beamlines.get(beamline, beamline)
+    normalized_beamline = normalized_beamlines[beamline]
     username = username or input("Enter your username: ")
 
     redis_location = (
