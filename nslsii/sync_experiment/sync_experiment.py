@@ -62,7 +62,7 @@ def sync_experiment(
     beamline = beamline.lower()
     if endstation:
         endstation = endstation.lower()
-    normalized_beamline = normalized_beamlines.get(beamline.lower(), beamline)
+    normalized_beamline = normalized_beamlines.get(beamline, beamline)
 
     # to-do:make this client use secure Redis (for API key storage)
     apikey_redis_client = redis.Redis(
@@ -209,7 +209,7 @@ def unsync_experiment(
     beamline = beamline.lower()
     if endstation:
         endstation = endstation.lower()
-    normalized_beamline = normalized_beamlines.get(beamline.lower(), beamline)
+    normalized_beamline = normalized_beamlines.get(beamline, beamline)
     apikey_redis_client = redis.Redis(
         host=f"info.{normalized_beamline}.nsls2.bnl.gov",
         port=6379,
@@ -295,7 +295,7 @@ def switch_proposal(
     beamline = beamline.lower()
     if endstation:
         endstation = endstation.lower()
-    normalized_beamline = normalized_beamlines.get(beamline.lower(), beamline.lower())
+    normalized_beamline = normalized_beamlines.get(beamline, beamline)
     username = username or input("Enter your username: ")
 
     redis_location = (
