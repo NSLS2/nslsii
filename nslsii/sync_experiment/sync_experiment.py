@@ -553,7 +553,7 @@ def get_api_key(redis_client, username, password, beamline, endstation, data_ses
 
     if api_key_cached:
         expires = datetime.fromisoformat(
-            api_key_cached[f"{redis_prefix}-expires"].decode("UTF-8")
+            api_key_cached[f"{redis_prefix}-ts-expires"].decode("UTF-8")
         )
         now = datetime.now(timezone.utc)
         if expires > now:
@@ -579,16 +579,16 @@ def cache_api_key(
 
     Keys are rotated out via priority queue according to their
     expiration dates. There is a limit set on the number of API keys that
-    may be cached a time.
+    may be cached at a time.
 
     The cached values have keys that are prefixed with:
     <beamline tla>-<endstation acronym>-<username>-<data sessions>-apikey
 
     There are 4 keys per each API key:
-    <prefix>-expires   : the timestamp of when the key will expire
-    <prefix>-created   : the timestamp of when the key was created/cached
-    <prefix>-encrypted : the encrypted API key
-    <prefix>-salt      : the salt used for encryption
+    <prefix>-ts-expires  : the timestamp of when the key will expire
+    <prefix>-ts-created  : the timestamp of when the key was created/cached
+    <prefix>-encrypted   : the encrypted API key
+    <prefix>-salt        : the salt used for encryption
 
     """
     data_sessions_sanitized = sorted(
@@ -607,14 +607,14 @@ def cache_api_key(
     cursor = 0
     expiry_dates = []
     while True:
-        cursor, keys = redis_client.scan(cursor=cursor, match="*expires")
+        cursor, keys = redis_client.scan(cursor=cursor, match="*ts-expires")
         if keys:
             values = redis_client.mget(keys)
             expiry_dates.extend(
                 [
                     (
                         datetime.fromisoformat(v.decode("UTF-8")),
-                        k.decode("UTF-8").removesuffix("-expires"),
+                        k.decode("UTF-8").removesuffix("-ts-expires"),
                     )
                     for k, v in zip(keys, values)
                 ]
@@ -637,9 +637,11 @@ def cache_api_key(
 
     encrypted_key, salt = encrypt_api_key(password, api_key_info["secret"])
     redis_client.set(
-        f"{redis_prefix}-expires", api_key_info["expiration_time"].isoformat()
+        f"{redis_prefix}-ts-expires", api_key_info["expiration_time"].isoformat()
     )
-    redis_client.set(f"{redis_prefix}-created", datetime.now(timezone.utc).isoformat())
+    redis_client.set(
+        f"{redis_prefix}-ts-created", datetime.now(timezone.utc).isoformat()
+    )
     redis_client.set(f"{redis_prefix}-encrypted", encrypted_key)
     redis_client.set(f"{redis_prefix}-salt", salt)
 
