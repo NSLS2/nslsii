@@ -84,12 +84,10 @@ def sync_experiment(
     username, password, duo_append = prompt_for_login(
         facility, beamline, endstation, proposal_ids
     )
-    try:
-        tiled_context = create_tiled_context(
-            username, password, duo_append, normalized_beamline, endstation
-        )
-    except Exception:
-        raise  # except if login fails
+
+    tiled_context = create_tiled_context(
+        username, password, duo_append, normalized_beamline, endstation
+    )
 
     data_sessions = {"pass-" + proposal_id for proposal_id in proposal_ids}
     if not proposals_can_be_authorized(username, facility, beamline, data_sessions):
@@ -101,7 +99,7 @@ def sync_experiment(
         proposals = retrieve_proposals(facility, beamline, proposal_ids)
     except Exception:
         tiled_context.logout()
-        raise  # except if proposal retrieval fails
+        raise
 
     api_key = get_api_key(
         apikey_redis_client,
@@ -118,7 +116,7 @@ def sync_experiment(
             )
         except:
             tiled_context.logout()
-            raise  # when cant create key
+            raise
         cache_api_key(
             apikey_redis_client,
             username,
@@ -494,7 +492,7 @@ def create_tiled_context(username, password, duo_append, beamline, endstation):
         )
     except httpx.HTTPStatusError as err:
         if err.response.status_code == httpx.codes.UNAUTHORIZED:
-            raise ValueError("Username or password not recognized.")
+            raise ValueError("Username or password not recognized.") from err
         else:
             raise
 
