@@ -81,10 +81,12 @@ def sync_experiment(
         db=15,
     )
 
-    username, password = prompt_for_login(facility, beamline, endstation, proposal_ids)
+    username, password, duo_append = prompt_for_login(
+        facility, beamline, endstation, proposal_ids
+    )
     try:
         tiled_context = create_tiled_context(
-            username, password, normalized_beamline, endstation
+            username, password, duo_append, normalized_beamline, endstation
         )
     except Exception:
         raise  # except if login fails
@@ -438,10 +440,11 @@ def prompt_for_login(facility, beamline, endstation, proposal_ids):
     print("Please login with your BNL credentials (you may receive a Duo prompt):")
     username = input("Username: ")
     password = SecretStr(getpass(prompt="Password: "))
-    return username, password
+    duo_append = input("Duo Passcode or Method (press Enter to ignore): ")
+    return username, password, duo_append
 
 
-def create_tiled_context(username, password, beamline, endstation):
+def create_tiled_context(username, password, duo_append, beamline, endstation):
     """
     Create a new Tiled context and authenticate.
 
@@ -483,6 +486,8 @@ def create_tiled_context(username, password, beamline, endstation):
             "Please select a provider with mode='internal'."
         )
 
+    if duo_append:
+        password = SecretStr(f"{password.get_secret_value()},{duo_append}")
     try:
         tokens = password_grant(
             http_client, auth_endpoint, provider, username, password.get_secret_value()
