@@ -197,7 +197,7 @@ def sync_experiment(
     md["username"] = username
     md["start_datetime"] = datetime.now().isoformat()
     # tiled-access-tags used by bluesky-tiled-writer, not saved to metadata
-    md["tiled_access_tags"] = list(activate_session)
+    md["tiled_access_tags"] = [activate_session]
     md["cycle"] = (
         "commissioning"
         if activate_proposal in get_commissioning_proposals(facility, beamline)
@@ -277,11 +277,13 @@ def unsync_experiment(
     md = RedisJSONDict(redis_client=md_redis_client, prefix=md_redis_prefix)
 
     set_api_key(apikey_redis_client, normalized_beamline, endstation, "")
-    data_sessions_deauthorized = md["data_sessions_authorized"]
+    data_sessions_deauthorized = md["data_sessions_authorized"] or [
+        "<no authorized data sessions>"
+    ]
     md["data_sessions_authorized"] = list()
-    data_session = md["data_session"]
+    data_session = md["data_session"] or "<no active data session>"
     md["data_session"] = ""
-    username = md["username"]
+    username = md["username"] or "<no current username>"
     md["username"] = ""
     md["start_datetime"] = ""
     md["tiled_access_tags"] = list()
@@ -407,7 +409,7 @@ def switch_proposal(
     md["username"] = username
     md["start_datetime"] = datetime.now().isoformat()
     # tiled-access-tags used by bluesky-tiled-writer, not saved to metadata
-    md["tiled_access_tags"] = list(activate_session)
+    md["tiled_access_tags"] = [activate_session]
     md["cycle"] = (
         "commissioning"
         if activate_proposal in get_commissioning_proposals(facility, beamline)
@@ -752,8 +754,8 @@ def retrieve_proposals(facility, beamline, proposal_ids):
     """
     Retrieve the data for the proposals that are being authorized.
     This is also a validation step, ensuring that all the
-    reequested proposals match the beamline. Without this validation,
-    access could be granted to the wrong proposals.
+    requested proposals match the beamline.
+    ***Without this validation, access could be granted to the wrong proposals.***
 
     In the future, this should also match proposals by facility as well.
 
