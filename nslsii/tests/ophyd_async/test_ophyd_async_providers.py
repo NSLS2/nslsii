@@ -1,5 +1,5 @@
 from datetime import datetime
-from enum import Enum, StrEnum
+from enum import Enum
 import pytest
 import os
 from ophyd_async.core import StaticFilenameProvider
