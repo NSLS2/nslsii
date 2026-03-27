@@ -1,5 +1,5 @@
 from datetime import datetime
-from enum import StrEnum
+from enum import Enum, StrEnum
 import pytest
 import os
 from ophyd_async.core import StaticFilenameProvider
@@ -11,7 +11,7 @@ from nslsii.ophyd_async import (
 )
 
 
-class TomoFrameType(StrEnum):
+class TomoFrameType(str, Enum):
     proj = "proj"
     flat = "flat"
     dark = "dark"
@@ -138,7 +138,7 @@ def test_acq_mode_filename_provider(initial_mode, include_datakey_name):
         am_fp.switch_mode(20)
 
     with pytest.raises(
-        TypeError, match="Acquisition mode type must be a subclass of StrEnum!"
+        TypeError, match="Acquisition mode type must be a subclass of Enum!"
     ):
         am_fp = AcqModeFilenameProvider(0)
 
