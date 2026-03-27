@@ -1,27 +1,24 @@
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 import pytest
 import os
-from ophyd_async.core import StaticFilenameProvider, UUIDFilenameProvider
+from ophyd_async.core import StaticFilenameProvider
 
 from nslsii.ophyd_async import (
-    ProposalNumYMDPathProvider,
-    ProposalNumScanNumPathProvider,
-    ShortUUIDFilenameProvider,
-    DeviceNameFilenameProvider,
     YMDGranularity,
+    AcqModeFilenameProvider,
+    NSLS2PathProvider,
 )
-from nslsii.ophyd_async.providers import AcqModeFilenameProvider, NSLS2PathProvider
 
 
-class TomoFrameType(Enum):
+class TomoFrameType(StrEnum):
     proj = "proj"
     flat = "flat"
     dark = "dark"
 
 
 @pytest.fixture
-def fp():
+def static_fp():
     return StaticFilenameProvider("test")
 
 
@@ -30,36 +27,54 @@ def dummy_re_md_dict():
     md = {
         "data_session": "pass-000000",
         "cycle": "2024-3",
-        "scan_id": 0,
+        "scan_id": 5,
     }
     return md
 
 
 @pytest.mark.parametrize(
-    ("ymd_granularity", "ymd_separator"),
+    ("ymd_granularity", "ymd_separator", "with_suffix", "scan_num_dir_basename"),
     [
-        (YMDGranularity.none, "_"),
-        (YMDGranularity.year, os.path.sep),
-        (YMDGranularity.month, "_"),
-        (YMDGranularity.day, os.path.sep),
+        (YMDGranularity.none, "_", True, None),
+        (YMDGranularity.year, os.path.sep, False, None),
+        (YMDGranularity.month, "_", True, None),
+        (YMDGranularity.day, os.path.sep, False, None),
+        (YMDGranularity.day, "_", False, "scan"),
+        (YMDGranularity.day, os.path.sep, False, "scan"),
     ],
 )
-def test_proposal_num_ymd_path_provider(
-    ymd_granularity, ymd_separator, dummy_re_md_dict, fp
+def test_nsls2_path_provider(
+    ymd_granularity,
+    ymd_separator,
+    with_suffix,
+    dummy_re_md_dict,
+    static_fp,
+    scan_num_dir_basename,
 ):
     os.environ["BEAMLINE_ACRONYM"] = "tst"
 
-    pp = ProposalNumYMDPathProvider(
-        fp, dummy_re_md_dict, granularity=ymd_granularity, separator=ymd_separator
+    pp = NSLS2PathProvider(
+        dummy_re_md_dict,
+        filename_provider=static_fp,
+        tla_suffix="-new" if with_suffix else None,
+        granularity=ymd_granularity,
+        separator=ymd_separator,
+        scan_num_dir_basename="scan" if scan_num_dir_basename else None,
     )
 
     today = datetime.today()
 
-    info = pp(device_name="test")
+    # Make sure we have to pass the datakey_name as an argument.
+    with pytest.raises(
+        TypeError, match="missing 1 required positional argument: 'datakey_name'"
+    ):
+        pp()
+
+    info = pp("test")
     dirpath = str(info.directory_path)
 
     assert dirpath.startswith(
-        "/nsls2/data/tst/proposals/2024-3/pass-000000/assets/test"
+        f"/nsls2/data/tst{'-new' if with_suffix else ''}/proposals/2024-3/pass-000000/assets/test"
     )
 
     if ymd_granularity == YMDGranularity.none:
@@ -71,92 +86,64 @@ def test_proposal_num_ymd_path_provider(
     elif ymd_granularity == YMDGranularity.month:
         assert info.create_dir_depth == -2
         assert dirpath.endswith(str(f"{today.year}{ymd_separator}{today.month:02}"))
-    elif ymd_granularity == YMDGranularity.day:
+    elif ymd_granularity == YMDGranularity.day and not scan_num_dir_basename:
         assert info.create_dir_depth == -3
         assert dirpath.endswith(
             str(
                 f"{today.year}{ymd_separator}{today.month:02}{ymd_separator}{today.day:02}"
             )
         )
+    elif ymd_granularity == YMDGranularity.day and scan_num_dir_basename:
+        assert info.create_dir_depth == -4
+        assert dirpath.endswith(
+            str(
+                f"{today.year}{ymd_separator}{today.month:02}{ymd_separator}{today.day:02}{os.path.sep}scan_000005"
+            )
+        )
 
 
-def test_proposal_num_scan_num_path_provider(fp, dummy_re_md_dict):
-    os.environ["BEAMLINE_ACRONYM"] = "tst"
-
-    pp = ProposalNumScanNumPathProvider(fp, dummy_re_md_dict)
-
-    info = pp(device_name="test")
-
-    assert (
-        str(info.directory_path)
-        == "/nsls2/data/tst/proposals/2024-3/pass-000000/assets/test/scan_000000"
+@pytest.mark.parametrize(
+    ("initial_mode", "include_datakey_name"),
+    [
+        (TomoFrameType.proj, True),
+        (TomoFrameType.dark, False),
+    ],
+)
+def test_acq_mode_filename_provider(initial_mode, include_datakey_name):
+    am_fp = AcqModeFilenameProvider(
+        TomoFrameType,
+        initial_mode=initial_mode,
+        include_datakey_name=include_datakey_name,
     )
-    assert info.create_dir_depth == -1
-
-    # Simulate scan id incrementing.
-    pp._metadata_dict["scan_id"] += 1
-
-    info_b = pp()
-
-    assert (
-        str(info_b.directory_path)
-        == "/nsls2/data/tst/proposals/2024-3/pass-000000/assets/scan_000001"
-    )
-    assert info_b.create_dir_depth == -1
-
-
-def test_device_name_filename_provider():
-    dev_name_fp = DeviceNameFilenameProvider()
-    assert "test" == dev_name_fp(device_name="test")
-
-    # Device name filename provider must be called with device_name kwarg
-    with pytest.raises(RuntimeError):
-        dev_name_fp()
-
-
-def test_short_uuid_filename_provider():
-    sid_fp = ShortUUIDFilenameProvider()
-
-    filename = sid_fp(device_name="test")
-    assert filename.startswith("test")
-    assert "_" in filename
-    assert len(filename.split("_")[-1]) == 22
-
-
-def test_acq_mode_filename_provider():
-    am_fp = AcqModeFilenameProvider(TomoFrameType.proj)
 
     assert am_fp._mode_type == TomoFrameType
-    assert am_fp._mode == TomoFrameType.proj
+    assert am_fp._mode == initial_mode
 
-    assert am_fp().startswith("proj")
+    def _check_filename(expected_mode: TomoFrameType):
+        filename = am_fp(datakey_name="test")
+        if include_datakey_name:
+            assert filename.startswith("test_" + expected_mode.value)
+        else:
+            assert filename.startswith(expected_mode.value)
+
+    _check_filename(initial_mode)
 
     am_fp.switch_mode(TomoFrameType.dark)
 
-    assert am_fp().startswith("dark")
+    _check_filename(TomoFrameType.dark)
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(
+        ValueError, match="20 is not a valid option for <enum 'TomoFrameType'>!"
+    ):
         am_fp.switch_mode(20)
 
-    with pytest.raises(TypeError):
+    with pytest.raises(
+        TypeError, match="Acquisition mode type must be a subclass of StrEnum!"
+    ):
         am_fp = AcqModeFilenameProvider(0)
 
-
-@pytest.mark.parametrize("with_suffix", [True, False])
-def test_nsls2_path_provider(with_suffix):
-    md = {"data_session": "pass-000000", "cycle": "2024-3", "scan_id": 5}
-    os.environ["BEAMLINE_ACRONYM"] = "TST"
-
-    pp = NSLS2PathProvider(
-        md, create_dir_depth=-3, tla_suffix="-new" if with_suffix else ""
-    )
-
-    # Default NSLS2PathProvider should use UUIDFilenameProvider
-    assert isinstance(pp.filename_provider, UUIDFilenameProvider)
-
-    info = pp(device_name="test")
-
-    assert str(info.directory_path).startswith(
-        f"/nsls2/data/tst{'-new' if with_suffix else ''}/proposals/2024-3/pass-000000/assets/test"
-    )
-    assert info.create_dir_depth == -3
+    with pytest.raises(
+        ValueError,
+        match="Initial acquisition mode 20 is not a valid option for <enum 'TomoFrameType'>!",
+    ):
+        am_fp = AcqModeFilenameProvider(TomoFrameType, initial_mode=20)
