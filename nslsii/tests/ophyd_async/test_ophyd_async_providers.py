@@ -33,14 +33,14 @@ def dummy_re_md_dict():
 
 
 @pytest.mark.parametrize(
-    ("ymd_granularity", "ymd_separator", "with_suffix", "scan_num_dir_basename"),
+    ("ymd_granularity", "ymd_separator", "with_suffix", "include_scan_id_dir"),
     [
-        (YMDGranularity.none, "_", True, None),
-        (YMDGranularity.year, os.path.sep, False, None),
-        (YMDGranularity.month, "_", True, None),
-        (YMDGranularity.day, os.path.sep, False, None),
-        (YMDGranularity.day, "_", False, "scan"),
-        (YMDGranularity.day, os.path.sep, False, "scan"),
+        (YMDGranularity.none, "_", True, False),
+        (YMDGranularity.year, os.path.sep, False, False),
+        (YMDGranularity.month, "_", True, False),
+        (YMDGranularity.day, os.path.sep, False, False),
+        (YMDGranularity.day, "_", False, True),
+        (YMDGranularity.day, os.path.sep, False, True),
     ],
 )
 def test_nsls2_path_provider(
@@ -49,7 +49,7 @@ def test_nsls2_path_provider(
     with_suffix,
     dummy_re_md_dict,
     static_fp,
-    scan_num_dir_basename,
+    include_scan_id_dir,
 ):
     os.environ["BEAMLINE_ACRONYM"] = "tst"
 
@@ -59,7 +59,7 @@ def test_nsls2_path_provider(
         tla_suffix="-new" if with_suffix else None,
         granularity=ymd_granularity,
         separator=ymd_separator,
-        scan_num_dir_basename="scan" if scan_num_dir_basename else None,
+        include_scan_id_dir=include_scan_id_dir,
     )
 
     today = datetime.today()
@@ -86,14 +86,14 @@ def test_nsls2_path_provider(
     elif ymd_granularity == YMDGranularity.month:
         assert info.create_dir_depth == -2
         assert dirpath.endswith(str(f"{today.year}{ymd_separator}{today.month:02}"))
-    elif ymd_granularity == YMDGranularity.day and not scan_num_dir_basename:
+    elif ymd_granularity == YMDGranularity.day and not include_scan_id_dir:
         assert info.create_dir_depth == -3
         assert dirpath.endswith(
             str(
                 f"{today.year}{ymd_separator}{today.month:02}{ymd_separator}{today.day:02}"
             )
         )
-    elif ymd_granularity == YMDGranularity.day and scan_num_dir_basename:
+    elif ymd_granularity == YMDGranularity.day and include_scan_id_dir:
         assert info.create_dir_depth == -4
         assert dirpath.endswith(
             str(

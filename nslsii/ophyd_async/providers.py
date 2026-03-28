@@ -132,8 +132,8 @@ class NSLS2PathProvider(PathProvider):
 
     /nsls2/data/{TLA}/proposals/{CYCLE}/{PROPOSAL}/assets/{DETECTOR}/{Y}/{M}/{D}
 
-    If scan_num_dir_basename is provided, an additional directory will be created at the
-    end of the path with the name {scan_num_dir_basename}_{scan_id:06}.
+    If include_scan_id_dir is provided, an additional directory will be created at the
+    end of the path with the name scan_{scan_id:06}.
 
     Parameters
     ----------
@@ -149,8 +149,8 @@ class NSLS2PathProvider(PathProvider):
         Granularity of the YMD portion of the path. If set to YMDGranularity.day, the path will include year, month,
         and day directories. If set to YMDGranularity.month, the path will include year and month directories.
         If set to YMDGranularity.year, the path will include only the year directory.
-    scan_num_dir_basename: str, optional
-        If provided, an additional directory will be created at the end of the path with the name {scan_num_dir_basename}_{scan_id:06}.
+    include_scan_id_dir: bool, default False
+        Whether to include a scan ID directory at the end of the path.
     """
 
     def __init__(
@@ -160,14 +160,14 @@ class NSLS2PathProvider(PathProvider):
         granularity: YMDGranularity = YMDGranularity.day,
         separator=os.path.sep,
         tla_suffix: Optional[str] = None,
-        scan_num_dir_basename: Optional[str] = None,
+        include_scan_id_dir: bool = False,
     ):
         self._filename_provider = filename_provider
         self._metadata_dict = metadata_dict
         self._granularity = granularity
         self._ymd_separator = separator
         self._tla_suffix = tla_suffix
-        self._scan_num_dir_basename = scan_num_dir_basename
+        self._include_scan_id_dir = include_scan_id_dir
         self._beamline_proposals_dir = self.get_beamline_proposals_dir()
 
     @property
@@ -200,8 +200,8 @@ class NSLS2PathProvider(PathProvider):
         """Helper function that generates ymd path structure.
 
         Depending on the granularity, the path will include year, month, and day directories.
-        If the scan_num_dir_basename is provided, an additional directory will be created at the end of the
-        path with the name {scan_num_dir_basename}_{scan_id:06}.
+        If the include_scan_id_dir is provided, an additional directory will be created at the end of the
+        path with the name scan_{scan_id:06}.
 
         Parameters
         ----------
@@ -250,11 +250,11 @@ class NSLS2PathProvider(PathProvider):
             / "assets"
             / ymd_dir_path
         )
-
-        if self._scan_num_dir_basename is not None:
+    
+        if self._include_scan_id_dir:
             directory_path = (
                 directory_path
-                / f"{self._scan_num_dir_basename}_{self._metadata_dict['scan_id']:06}"
+                / f"scan_{self._metadata_dict['scan_id']:06}"
             )
 
         return directory_path
@@ -279,5 +279,5 @@ class NSLS2PathProvider(PathProvider):
             directory_path=directory_path,
             filename=self._filename_provider(),
             create_dir_depth=-self._granularity
-            - (1 if self._scan_num_dir_basename is not None else 0),
+            - (1 if self._include_scan_id_dir else 0),
         )
