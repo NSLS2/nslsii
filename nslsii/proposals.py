@@ -42,7 +42,7 @@ def find_proposals(client, pi_name, cycle=None, show_title=True):
 
     Example
     --------
-    >>> find_proposals(tiled_reading_client, 'Smith', cycle='2023-2')
+    >>> find_proposals(tiled_reading_client, 'Smith', cycle='2026-1')
     """
 
     results = client.search(Regex("proposal.pi_name", f"^{pi_name}"))
