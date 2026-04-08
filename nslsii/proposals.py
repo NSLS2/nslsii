@@ -51,35 +51,36 @@ def find_proposals(client, pi_name, cycle=None, show_title=True):
     proposal_distinct = results.distinct("proposal.proposal_id", counts=True)
 
     proposal_info = {}
-    for item in proposal_distinct["metadata"]["start.proposal.proposal_id"]:
-        if item["count"] > 0:
-            proposal_results = results.search(
-                Key("proposal.proposal_id") == item["value"]
-            )
-            scan_single = proposal_results.values().first()
-            parent_path = get_parent_directory(proposal_results)
+    if len(proposal_distinct["metadata"]) > 0:
+        for item in proposal_distinct["metadata"]["start.proposal.proposal_id"]:
+            if item["count"] > 0:
+                proposal_results = results.search(
+                    Key("proposal.proposal_id") == item["value"]
+                )
+                scan_single = proposal_results.values().first()
+                parent_path = get_parent_directory(proposal_results)
 
-            proposal_info[item["value"]] = {"pi_name": pi_name}
-            if cycle is not None:
-                proposal_info[item["value"]]["proposal_info"] = {
-                    "cycle": cycle,
-                    "total": item["count"],
-                    "path": f"{parent_path}/{cycle}/pass-{item['value']}/",
-                }
-            else:
-                cycle_distinct = proposal_results.distinct("cycle", counts=True)
-                proposal_info[item["value"]]["proposal_info"] = [
-                    {
-                        "cycle": elem["value"],
-                        "total": elem["count"],
-                        "path": f"{parent_path}/{elem['value']}/pass-{item['value']}/",
+                proposal_info[item["value"]] = {"pi_name": pi_name}
+                if cycle is not None:
+                    proposal_info[item["value"]]["proposal_info"] = {
+                        "cycle": cycle,
+                        "total": item["count"],
+                        "path": f"{parent_path}/{cycle}/pass-{item['value']}/",
                     }
-                    for elem in cycle_distinct["metadata"]["start.cycle"]
-                ]
+                else:
+                    cycle_distinct = proposal_results.distinct("cycle", counts=True)
+                    proposal_info[item["value"]]["proposal_info"] = [
+                        {
+                            "cycle": elem["value"],
+                            "total": elem["count"],
+                            "path": f"{parent_path}/{elem['value']}/pass-{item['value']}/",
+                        }
+                        for elem in cycle_distinct["metadata"]["start.cycle"]
+                    ]
 
-            if show_title:
-                proposal_info[item["value"]]["title"] = scan_single.start["proposal"][
-                    "title"
-                ]
+                if show_title:
+                    proposal_info[item["value"]]["title"] = scan_single.start[
+                        "proposal"
+                    ]["title"]
 
     pprint(proposal_info)
