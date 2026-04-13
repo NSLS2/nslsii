@@ -56,7 +56,7 @@ def test_nsls2_path_provider(
     pp = NSLS2PathProvider(
         dummy_re_md_dict,
         filename_provider=static_fp,
-        tla_suffix="-new" if with_suffix else None,
+        beamline_tla_suffix="-new" if with_suffix else None,
         granularity=ymd_granularity,
         separator=ymd_separator,
         include_scan_id_dir=include_scan_id_dir,
