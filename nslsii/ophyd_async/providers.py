@@ -170,14 +170,17 @@ class NSLS2PathProvider(PathProvider):
         self._granularity = granularity
         self._ymd_separator = separator
 
-        self._beamline_proposals_dir = Path(
-            f"/nsls2/data/{
+        self._beamline_proposals_dir = (
+            Path("/nsls2/data/")
+            / (
                 beamline_tla
                 if beamline_tla is not None
                 else os.getenv(
-                    'ENDSTATION_ACRONYM', os.getenv('BEAMLINE_ACRONYM', '')
+                    "ENDSTATION_ACRONYM", os.getenv("BEAMLINE_ACRONYM", "")
                 ).lower()
-            }{beamline_tla_suffix or ''}/proposals/"
+                + (beamline_tla_suffix or "")
+            )
+            / "proposals"
         )
 
         self._include_scan_id_dir = include_scan_id_dir
