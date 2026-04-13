@@ -170,7 +170,7 @@ class NSLS2PathProvider(PathProvider):
         self._granularity = granularity
         self._ymd_separator = separator
 
-        self._beamline_propsals_dir = Path(
+        self._beamline_proposals_dir = Path(
             f"/nsls2/data/{
                 beamline_tla
                 if beamline_tla is not None
