@@ -33,19 +33,26 @@ def dummy_re_md_dict():
 
 
 @pytest.mark.parametrize(
-    ("ymd_granularity", "ymd_separator", "with_suffix", "include_scan_id_dir"),
+    (
+        "ymd_granularity",
+        "ymd_separator",
+        "tla_override",
+        "with_suffix",
+        "include_scan_id_dir",
+    ),
     [
-        (YMDGranularity.none, "_", True, False),
-        (YMDGranularity.year, os.path.sep, False, False),
-        (YMDGranularity.month, "_", True, False),
-        (YMDGranularity.day, os.path.sep, False, False),
-        (YMDGranularity.day, "_", False, True),
-        (YMDGranularity.day, os.path.sep, False, True),
+        (YMDGranularity.none, "_", None, True, False),
+        (YMDGranularity.year, os.path.sep, None, False, False),
+        (YMDGranularity.month, "_", "not-tst", False, False),
+        (YMDGranularity.day, os.path.sep, None, False, False),
+        (YMDGranularity.day, "_", None, True, False),
+        (YMDGranularity.day, os.path.sep, "not-tst", True, False),
     ],
 )
 def test_nsls2_path_provider(
     ymd_granularity,
     ymd_separator,
+    tla_override,
     with_suffix,
     dummy_re_md_dict,
     static_fp,
@@ -56,6 +63,7 @@ def test_nsls2_path_provider(
     pp = NSLS2PathProvider(
         dummy_re_md_dict,
         filename_provider=static_fp,
+        beamline_tla=tla_override,
         beamline_tla_suffix="-new" if with_suffix else None,
         granularity=ymd_granularity,
         separator=ymd_separator,
@@ -74,7 +82,7 @@ def test_nsls2_path_provider(
     dirpath = str(info.directory_path)
 
     assert dirpath.startswith(
-        f"/nsls2/data/tst{'-new' if with_suffix else ''}/proposals/2024-3/pass-000000/assets/test"
+        f"/nsls2/data/{'tst' if not tla_override else tla_override}{'-new' if with_suffix else ''}/proposals/2024-3/pass-000000/assets/test"
     )
 
     if ymd_granularity == YMDGranularity.none:
