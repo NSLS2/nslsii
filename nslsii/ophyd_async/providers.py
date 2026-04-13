@@ -125,8 +125,7 @@ class AcqModeFilenameProvider(UUIDFilenameProvider):
 
 
 class NSLS2PathProvider(PathProvider):
-    """
-    Default NSLS2 path provider
+    """Default NSLS2 path provider.
 
     Generates paths in the following format:
 
@@ -141,15 +140,18 @@ class NSLS2PathProvider(PathProvider):
         Typically `RE.md`. Used for dynamic save path generation from sync-d experiment
     filename_provider : FilenameProvider, default UUIDFilenameProvider()
         Filename provider to use for generating filenames.
-    tla_suffix: Optional[str], default None
+    beamline_tla : str, optional
+        TLA of the beamline to use in the path. If not provided, the TLA will be determined from
+        the ENDSTATION_ACRONYM or BEAMLINE_ACRONYM environment variables.
+    beamline_tla_suffix : str, optional
         Suffix to add to TLA when generating path.
-    separator: str, default os.path.sep
+    separator : str, default os.path.sep
         Separator to use in YMD portion of the path. Defaults to os.path.sep. Should be set to `\\` for Windows paths.
-    granularity: YMDGranularity, default YMDGranularity.day
+    granularity : YMDGranularity, default YMDGranularity.day
         Granularity of the YMD portion of the path. If set to YMDGranularity.day, the path will include year, month,
         and day directories. If set to YMDGranularity.month, the path will include year and month directories.
         If set to YMDGranularity.year, the path will include only the year directory.
-    include_scan_id_dir: bool, default False
+    include_scan_id_dir : bool, default False
         Whether to include a scan ID directory at the end of the path.
     """
 
@@ -159,42 +161,32 @@ class NSLS2PathProvider(PathProvider):
         filename_provider: FilenameProvider = UUIDFilenameProvider(),
         granularity: YMDGranularity = YMDGranularity.day,
         separator=os.path.sep,
-        tla_suffix: Optional[str] = None,
+        beamline_tla: Optional[str] = None,
+        beamline_tla_suffix: Optional[str] = None,
         include_scan_id_dir: bool = False,
     ):
         self._filename_provider = filename_provider
         self._metadata_dict = metadata_dict
         self._granularity = granularity
         self._ymd_separator = separator
-        self._tla_suffix = tla_suffix
+
+        self._beamline_propsals_dir = Path(
+            f"/nsls2/data/{
+                beamline_tla
+                if beamline_tla is not None
+                else os.getenv(
+                    'ENDSTATION_ACRONYM', os.getenv('BEAMLINE_ACRONYM', '')
+                ).lower()
+            }{beamline_tla_suffix or ''}/proposals/"
+        )
+
         self._include_scan_id_dir = include_scan_id_dir
-        self._beamline_proposals_dir = self.get_beamline_proposals_dir()
 
     @property
     def filename_provider(self) -> FilenameProvider:
         """Returns the filename provider used by this path provider."""
 
         return self._filename_provider
-
-    def get_beamline_proposals_dir(self) -> Path:
-        """Function that computes path to the proposals directory based on TLA env vars
-
-        Gets the beamline TLA from the environment variable `ENDSTATION_ACRONYM` or `BEAMLINE_ACRONYM`,
-        adds the `tla_suffix` if provided, and constructs the path to the proposals directory in the format
-        `/nsls2/data/{TLA}/proposals/`.
-
-        Returns
-        -------
-        Path
-             The path to the beamline proposals directory.
-        """
-
-        beamline_tla = os.getenv(
-            "ENDSTATION_ACRONYM", os.getenv("BEAMLINE_ACRONYM", "")
-        ).lower() + (self._tla_suffix or "")
-        beamline_proposals_dir = Path(f"/nsls2/data/{beamline_tla}/proposals/")
-
-        return beamline_proposals_dir
 
     def generate_directory_path(self, datakey_name) -> Path:
         """Helper function that generates ymd path structure.
@@ -250,11 +242,10 @@ class NSLS2PathProvider(PathProvider):
             / "assets"
             / ymd_dir_path
         )
-    
+
         if self._include_scan_id_dir:
             directory_path = (
-                directory_path
-                / f"scan_{self._metadata_dict['scan_id']:06}"
+                directory_path / f"scan_{self._metadata_dict['scan_id']:06}"
             )
 
         return directory_path
