@@ -41,7 +41,7 @@ def find_proposals(client, pi_name, cycle=None, optional_queries=None, show_titl
         Additional query parameters to filter proposals based on specific keys and values in the start document.
         If the value is a string, it will be treated as an exact match.
         If the value is a number, include the operator in the value as a tuple, for example:
-        {"start.exposure_time": (">", 10)}.
+        {"start.exposure_time": (">", 10)}. Supported operators are "==", "!=", ">", "<", ">=", and "<=".
     show_title : bool, optional
         Whether to display the title of the proposals.
 
