@@ -81,9 +81,9 @@ def test_nsls2_path_provider(
     info = pp("test")
     dirpath = str(info.directory_path)
 
-    assert dirpath.startswith(
-        f"/nsls2/data/{'tst' if not tla_override else tla_override}{'-new' if with_suffix else ''}/proposals/2024-3/pass-000000/assets/test"
-    )
+    expected_startwith = f"/nsls2/data/{'tst' if not tla_override else tla_override}{'-new' if with_suffix else ''}/proposals/2024-3/pass-000000/assets/test"  # noqa: E501
+
+    assert dirpath.startswith(expected_startwith)
 
     if ymd_granularity == YMDGranularity.none:
         assert info.create_dir_depth == 0
