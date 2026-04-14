@@ -1,16 +1,11 @@
 import argparse
-import base64
-import heapq
 import httpx
 import json
 import os
 import re
 import redis
 
-from cryptography.fernet import Fernet, InvalidToken
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from datetime import datetime, timezone
+from datetime import datetime
 from getpass import getpass
 from pydantic.types import SecretStr
 from redis_json_dict import RedisJSONDict
@@ -95,6 +90,7 @@ def sync_experiment(
         host=f"info.{normalized_beamline}.nsls2.bnl.gov",
         port=6379,
         db=15,
+        decode_responses=True,
     )
 
     username, password, duo_append = prompt_for_login(
@@ -102,11 +98,12 @@ def sync_experiment(
     )
 
     tiled_context = create_tiled_context(
-        username, password, duo_append, normalized_beamline, endstation
+        normalized_beamline, endstation, username, password, duo_append
     )
 
     data_sessions = {"pass-" + proposal_id for proposal_id in proposal_ids}
     if not proposals_can_be_authorized(username, facility, beamline, data_sessions):
+        tiled_context.api_key = None
         tiled_context.logout()
         raise ValueError(
             f"You do not have permissions to authorize all proposal IDs: {', '.join(proposal_ids)}"
@@ -114,44 +111,33 @@ def sync_experiment(
     try:
         proposals = retrieve_proposals(facility, beamline, proposal_ids)
     except Exception:
+        tiled_context.api_key = None
         tiled_context.logout()
         raise
 
-    api_key = get_api_key(
-        apikey_redis_client,
-        username,
-        password,
-        normalized_beamline,
-        endstation,
-        data_sessions,
-    )
-    if not api_key:
+    api_key_active = get_api_key(apikey_redis_client, normalized_beamline, endstation)
+    if api_key_active:
+        set_api_key(apikey_redis_client, normalized_beamline, endstation, "")
+        tiled_context_revoke = create_tiled_context(
+            normalized_beamline, endstation, api_key=api_key_active
+        )
         try:
-            api_key_info = create_api_key(
-                tiled_context, data_sessions, normalized_beamline
-            )
-        except:
-            tiled_context.logout()
-            raise
-        cache_api_key(
-            apikey_redis_client,
-            username,
-            password,
-            normalized_beamline,
-            endstation,
-            data_sessions,
-            api_key_info,
-        )
-        api_key = get_api_key(
-            apikey_redis_client,
-            username,
-            password,
-            normalized_beamline,
-            endstation,
-            data_sessions,
-        )
+            revoke_api_key(tiled_context_revoke)
+        except Exception as e:
+            print(f"Revocation of existing API key may have failed: {e}")
+        finally:
+            tiled_context_revoke.api_key = None
+            tiled_context_revoke.logout()
+    try:
+        api_key_info = create_api_key(tiled_context, data_sessions, normalized_beamline)
+        api_key = api_key_info["secret"]
+    except Exception:
+        tiled_context.api_key = None
+        tiled_context.logout()
+        raise
     set_api_key(apikey_redis_client, normalized_beamline, endstation, api_key)
 
+    tiled_context.api_key = None
     tiled_context.logout()
 
     md_redis_client = redis.Redis(host=f"info.{normalized_beamline}.nsls2.bnl.gov")
@@ -246,6 +232,7 @@ def unsync_experiment(
         host=f"info.{normalized_beamline}.nsls2.bnl.gov",
         port=6379,
         db=15,
+        decode_responses=True,
     )
 
     md_redis_client = redis.Redis(host=f"info.{normalized_beamline}.nsls2.bnl.gov")
@@ -256,7 +243,19 @@ def unsync_experiment(
     )
     md = RedisJSONDict(redis_client=md_redis_client, prefix=md_redis_prefix)
 
-    set_api_key(apikey_redis_client, normalized_beamline, endstation, "")
+    api_key_active = get_api_key(apikey_redis_client, normalized_beamline, endstation)
+    if api_key_active:
+        set_api_key(apikey_redis_client, normalized_beamline, endstation, "")
+        tiled_context_revoke = create_tiled_context(
+            normalized_beamline, endstation, api_key=api_key_active
+        )
+        try:
+            revoke_api_key(tiled_context_revoke)
+        except Exception as e:
+            print(f"Revocation of existing API key may have failed: {e}")
+        finally:
+            tiled_context_revoke.api_key = None
+            tiled_context_revoke.logout()
     data_sessions_deauthorized = md["data_sessions_authorized"] or [
         "<no authorized data sessions>"
     ]
@@ -396,51 +395,6 @@ def switch_proposal(
     return md
 
 
-def encrypt_api_key(password, api_key):
-    """
-    This is a reference implementation taken from the
-    cryptography library docs:
-    https://cryptography.io/en/latest/fernet/#using-passwords-with-fernet
-
-    The number of iterations was taken from Django's current settings.
-    """
-    salt = os.urandom(16)
-    kdf = PBKDF2HMAC(
-        algorithm=hashes.SHA256(),
-        length=32,
-        salt=salt,
-        iterations=1_500_000,
-    )
-    key = base64.urlsafe_b64encode(
-        kdf.derive(password.get_secret_value().encode("UTF-8"))
-    )
-    f = Fernet(key)
-    token = f.encrypt(api_key.encode("UTF-8"))
-    return token, salt
-
-
-def decrypt_api_key(password, salt, api_key_encrypted):
-    """
-    This is a reference implementation taken from the
-    cryptography library docs:
-    https://cryptography.io/en/latest/fernet/#using-passwords-with-fernet
-
-    The number of iterations was taken from Django's current settings.
-    """
-    kdf = PBKDF2HMAC(
-        algorithm=hashes.SHA256(),
-        length=32,
-        salt=salt,
-        iterations=1_500_000,
-    )
-    key = base64.urlsafe_b64encode(
-        kdf.derive(password.get_secret_value().encode("UTF-8"))
-    )
-    f = Fernet(key)
-    token = f.decrypt(api_key_encrypted)
-    return token.decode("UTF-8")
-
-
 def prompt_for_login(facility, beamline, endstation, proposal_ids):
     print(f"\nWelcome to the {beamline.upper()} beamline at {facility.upper()}!\n")
     if endstation:
@@ -455,13 +409,18 @@ def prompt_for_login(facility, beamline, endstation, proposal_ids):
     return username, password, duo_append
 
 
-def create_tiled_context(username, password, duo_append, beamline, endstation):
+def create_tiled_context(
+    beamline, endstation, username=None, password=None, duo_append=None, api_key=None
+):
     """
     Create a new Tiled context and authenticate.
 
     Loads the beamline Tiled profile, instantiates the new context,
     selects an AuthN provider, attempts to retrieve tokens via password_grant,
     then prints a confirmation message and authenticates the context.
+
+    If an api key is provided, the context is returned with that api key
+    attached, and further authentication is skipped.
 
     """
     profiles = load_profiles()
@@ -473,8 +432,17 @@ def create_tiled_context(username, password, duo_append, beamline, endstation):
         raise ValueError(f"Cannot find Tiled profile for beamline {beamline.upper()}")
 
     context, _ = Context.from_any_uri(
-        profile["uri"], verify=profile.get("verify", True)
+        profile["uri"], api_key=api_key, verify=profile.get("verify", True)
     )
+
+    if api_key:
+        return context
+
+    if not username or not password:
+        raise ValueError(
+            "Please provide a username and password, "
+            "or an API key, to authenticate the Tiled context"
+        )
 
     providers = context.server_info.authentication.providers
     http_client = context.http_client
@@ -522,7 +490,7 @@ def create_tiled_context(username, password, duo_append, beamline, endstation):
 def create_api_key(tiled_context, data_sessions, beamline):
     access_tags = [data_session for data_session in data_sessions]
     access_tags.append(f"_ROOT_NODE_{beamline.upper()}")
-    scopes = ["read:data", "read:metadata"]
+    scopes = ["read:data", "read:metadata", "revoke:apikeys"]
     expires_in = "7d"
     hostname = os.getenv("HOSTNAME", "unknown host")
     note = f"Auto-generated by sync-experiment from {hostname}"
@@ -533,6 +501,14 @@ def create_api_key(tiled_context, data_sessions, beamline):
         access_tags=access_tags, scopes=scopes, expires_in=expires_in, note=note
     )
     return info
+
+
+def revoke_api_key(tiled_context):
+    api_key = getattr(tiled_context, "api_key", None)
+    if not api_key:
+        raise ValueError("No API key attached to Tiled context. No API key to revoke.")
+    first_eight = api_key[:8]
+    tiled_context.revoke_api_key(first_eight)
 
 
 def set_api_key(redis_client, beamline, endstation, api_key):
@@ -549,128 +525,20 @@ def set_api_key(redis_client, beamline, endstation, api_key):
     redis_client.set(f"{redis_prefix}-active", api_key)
 
 
-def get_api_key(redis_client, username, password, beamline, endstation, data_sessions):
+def get_api_key(redis_client, beamline, endstation):
     """
-    Retrieve an API key from Redis.
-    Query Redis for key information, decrypt the API key if found,
-    ignore the key if it is expired, and finally return the key
-    if it is still fresh.
-    Failure to decrypt (e.g. a changed password) will also cause
-    existing keys to be ignored.
+    Use to get the active API key in Redis.
+
+    The active API key is stored with key:
+    <beamline tla>-<endstation acronym>-apikey-active
 
     """
-    data_sessions_sanitized = sorted(
-        data_session.replace("-", "") for data_session in data_sessions
-    )
-    redis_prefix = f"{beamline}-{endstation}" if endstation else f"{beamline}"
     redis_prefix = (
-        f"{redis_prefix}-{username}-{'-'.join(data_sessions_sanitized)}-apikey"
+        f"{beamline}-{endstation}-apikey" if endstation else f"{beamline}-apikey"
     )
-
-    api_key_cached = {}
-    cursor = 0
-    while True:
-        cursor, keys = redis_client.scan(cursor=cursor, match=f"{redis_prefix}*")
-        if keys:
-            values = redis_client.mget(keys)
-            keys = [key.decode("UTF-8") for key in keys]
-            api_key_cached.update(dict(zip(keys, values)))
-        if cursor == 0:
-            break
-
-    if api_key_cached:
-        expires = datetime.fromisoformat(
-            api_key_cached[f"{redis_prefix}-ts-expires"].decode("UTF-8")
-        )
-        now = datetime.now(timezone.utc)
-        if expires > now:
-            salt = api_key_cached[f"{redis_prefix}-salt"]
-            api_key_encrypted = api_key_cached[f"{redis_prefix}-encrypted"]
-            try:
-                api_key = decrypt_api_key(password, salt, api_key_encrypted)
-            except InvalidToken:
-                api_key = None
-        else:
-            api_key = None
-    else:
-        api_key = None
+    api_key = redis_client.get(f"{redis_prefix}-active")
 
     return api_key
-
-
-def cache_api_key(
-    redis_client, username, password, beamline, endstation, data_sessions, api_key_info
-):
-    """
-    Encrypt and cache and API key in Redis.
-
-    Keys are rotated out via priority queue according to their
-    expiration dates. There is a limit set on the number of API keys that
-    may be cached at a time.
-
-    The cached values have keys that are prefixed with:
-    <beamline tla>-<endstation acronym>-<username>-<data sessions>-apikey
-
-    There are 4 keys per each API key:
-    <prefix>-ts-expires  : the timestamp of when the key will expire
-    <prefix>-ts-created  : the timestamp of when the key was created/cached
-    <prefix>-encrypted   : the encrypted API key
-    <prefix>-salt        : the salt used for encryption
-
-    """
-    data_sessions_sanitized = sorted(
-        data_session.replace("-", "") for data_session in data_sessions
-    )
-    redis_prefix = f"{beamline}-{endstation}" if endstation else f"{beamline}"
-    redis_prefix = (
-        f"{redis_prefix}-{username}-{'-'.join(data_sessions_sanitized)}-apikey"
-    )
-
-    MAX_ENTRIES = 5
-    COUNT_PER_ENTRY = 4
-    COUNT_NON_ENTRIES = 1
-    length = redis_client.dbsize
-
-    cursor = 0
-    expiry_dates = []
-    while True:
-        cursor, keys = redis_client.scan(cursor=cursor, match="*ts-expires")
-        if keys:
-            values = redis_client.mget(keys)
-            expiry_dates.extend(
-                [
-                    (
-                        datetime.fromisoformat(v.decode("UTF-8")),
-                        k.decode("UTF-8").removesuffix("-ts-expires"),
-                    )
-                    for k, v in zip(keys, values)
-                ]
-            )
-        if cursor == 0:
-            break
-
-    heapq.heapify(expiry_dates)
-    while (length() - COUNT_NON_ENTRIES) / COUNT_PER_ENTRY >= MAX_ENTRIES:
-        expiry_prefix = heapq.heappop(expiry_dates)[1]
-        cursor = 0
-        while True:
-            cursor, keys = redis_client.scan(
-                cursor=cursor, match=f"{expiry_prefix}*", count=10
-            )
-            if keys:
-                redis_client.delete(*keys)
-            if cursor == 0:
-                break
-
-    encrypted_key, salt = encrypt_api_key(password, api_key_info["secret"])
-    redis_client.set(
-        f"{redis_prefix}-ts-expires", api_key_info["expiration_time"].isoformat()
-    )
-    redis_client.set(
-        f"{redis_prefix}-ts-created", datetime.now(timezone.utc).isoformat()
-    )
-    redis_client.set(f"{redis_prefix}-encrypted", encrypted_key)
-    redis_client.set(f"{redis_prefix}-salt", salt)
 
 
 def get_current_cycle(facility):
