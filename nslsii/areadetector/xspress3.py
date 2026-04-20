@@ -136,11 +136,16 @@ class Xspress3ExternalFileReference(Signal):
 
     """
 
-    def __init__(self, *args, dtype_str="uint32", bin_count=4096, dim_name="bin_count", **kwargs):
+    def __init__(self, *args, dtype_str="uint32", bin_count=4096, dim_name=("frame_number", "number_channels", "bin_count"), **kwargs):
         super().__init__(*args, **kwargs)
         self.dtype_str = dtype_str
         self.shape = (bin_count,)
-        self.dims = (dim_name,)
+        if isinstance(dim_name, str):
+            self.dims = (dim_name,)  # Keeping this option for backward compatibility with some beamlines
+        elif isinstance(dim_name, list):
+            self.dims = (*dim_name,)
+        else:
+            self.dims = dim_name
 
     def describe(self):
         res = super().describe()
