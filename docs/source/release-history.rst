@@ -6,63 +6,63 @@ v0.11.1 (2025-03-27)
 ====================
 What's Changed
 ..............
-* Move redis parameters to the kwarg-only section by `@jennmald <https://github.com/jennmald>`_ in https://github.com/NSLS-II/nslsii/pull/214
+* Move redis parameters to the kwarg-only section by `@jennmald <https://github.com/jennmald>`_ in https://github.com/NSLS2/nslsii/pull/214
 
 
-**Full Changelog**: https://github.com/NSLS-II/nslsii/compare/v0.11.0...v0.11.1
+**Full Changelog**: https://github.com/NSLS2/nslsii/compare/v0.11.0...v0.11.1
 
 
 v0.11.0 (2025-03-25)
 ====================
 What's Changed
 ..............
-* Fix: default broker to None by `@maffettone <https://github.com/maffettone>`_ in https://github.com/NSLS-II/nslsii/pull/205
-* Refactor auth mechanism in sync-experiment by `@genematx <https://github.com/genematx>`_ in https://github.com/NSLS-II/nslsii/pull/198
-* Fix: configure_kafka_publisher assumed a string by `@maffettone <https://github.com/maffettone>`_ in https://github.com/NSLS-II/nslsii/pull/209
-* Remove persistent dict and add redis_json_dict support by `@jennmald <https://github.com/jennmald>`_ in https://github.com/NSLS-II/nslsii/pull/212
-* Adds if_touch_beamline function to common by `@jennmald <https://github.com/jennmald>`_ in https://github.com/NSLS-II/nslsii/pull/211
+* Fix: default broker to None by `@maffettone <https://github.com/maffettone>`_ in https://github.com/NSLS2/nslsii/pull/205
+* Refactor auth mechanism in sync-experiment by `@genematx <https://github.com/genematx>`_ in https://github.com/NSLS2/nslsii/pull/198
+* Fix: configure_kafka_publisher assumed a string by `@maffettone <https://github.com/maffettone>`_ in https://github.com/NSLS2/nslsii/pull/209
+* Remove persistent dict and add redis_json_dict support by `@jennmald <https://github.com/jennmald>`_ in https://github.com/NSLS2/nslsii/pull/212
+* Adds if_touch_beamline function to common by `@jennmald <https://github.com/jennmald>`_ in https://github.com/NSLS2/nslsii/pull/211
 
 **New Contributors**
 
-* `@jennmald <https://github.com/jennmald>`_ made their first contribution in https://github.com/NSLS-II/nslsii/pull/212
+* `@jennmald <https://github.com/jennmald>`_ made their first contribution in https://github.com/NSLS2/nslsii/pull/212
 
-**Full Changelog**: https://github.com/NSLS-II/nslsii/compare/v0.10.7...v0.11.0
+**Full Changelog**: https://github.com/NSLS2/nslsii/compare/v0.10.7...v0.11.0
 
 v0.10.7 (2024-10-30)
 ====================
 What's Changed
 ..............
-* CI: only use the `published` event for PyPI releases by `@mrakitin <https://github.com/mrakitin>`_ in https://github.com/NSLS-II/nslsii/pull/203
-* Remove 'finally' that is eating exceptions by `@nmaytan <https://github.com/nmaytan>`_ in https://github.com/NSLS-II/nslsii/pull/200
-* Use a configuration file from `n2sn_user_tools` for `sync-experiment` by `@mrakitin <https://github.com/mrakitin>`_ in https://github.com/NSLS-II/nslsii/pull/202
-* Deprecate the webcam class by `@mrakitin <https://github.com/mrakitin>`_ in https://github.com/NSLS-II/nslsii/pull/204
+* CI: only use the `published` event for PyPI releases by `@mrakitin <https://github.com/mrakitin>`_ in https://github.com/NSLS2/nslsii/pull/203
+* Remove 'finally' that is eating exceptions by `@nmaytan <https://github.com/nmaytan>`_ in https://github.com/NSLS2/nslsii/pull/200
+* Use a configuration file from `n2sn_user_tools` for `sync-experiment` by `@mrakitin <https://github.com/mrakitin>`_ in https://github.com/NSLS2/nslsii/pull/202
+* Deprecate the webcam class by `@mrakitin <https://github.com/mrakitin>`_ in https://github.com/NSLS2/nslsii/pull/204
 
 
-**Full Changelog**: https://github.com/NSLS-II/nslsii/compare/v0.10.6...v0.10.7
+**Full Changelog**: https://github.com/NSLS2/nslsii/compare/v0.10.6...v0.10.7
 
 v0.10.6 (2024-10-29)
 ====================
 What's Changed
 ..............
-* Adding pre-commit config setup from ophyd async by `@jwlodek <https://github.com/jwlodek>`_ in https://github.com/NSLS-II/nslsii/pull/191
-* Update PyPI when release is created or published by `@padraic-shafer <https://github.com/padraic-shafer>`_ in https://github.com/NSLS-II/nslsii/pull/197
-* Adding standard ophyd async path and filename providers by `@jwlodek <https://github.com/jwlodek>`_ in https://github.com/NSLS-II/nslsii/pull/192
-* Update authentication method for sync experiment to be more robust in… by `@jwlodek <https://github.com/jwlodek>`_ in https://github.com/NSLS-II/nslsii/pull/199
+* Adding pre-commit config setup from ophyd async by `@jwlodek <https://github.com/jwlodek>`_ in https://github.com/NSLS2/nslsii/pull/191
+* Update PyPI when release is created or published by `@padraic-shafer <https://github.com/padraic-shafer>`_ in https://github.com/NSLS2/nslsii/pull/197
+* Adding standard ophyd async path and filename providers by `@jwlodek <https://github.com/jwlodek>`_ in https://github.com/NSLS2/nslsii/pull/192
+* Update authentication method for sync experiment to be more robust in… by `@jwlodek <https://github.com/jwlodek>`_ in https://github.com/NSLS2/nslsii/pull/199
 
 ## New Contributors
-* `@padraic-shafer <https://github.com/padraic-shafer>`_ made their first contribution in https://github.com/NSLS-II/nslsii/pull/197
+* `@padraic-shafer <https://github.com/padraic-shafer>`_ made their first contribution in https://github.com/NSLS2/nslsii/pull/197
 
-**Full Changelog**: https://github.com/NSLS-II/nslsii/compare/v0.10.5...v0.10.6
+**Full Changelog**: https://github.com/NSLS2/nslsii/compare/v0.10.5...v0.10.6
 
 v0.10.5 (2024-09-27)
 ====================
 What's Changed
 ..............
-* Move srx caproto iocs by `@jwlodek <https://github.com/jwlodek>`_ in https://github.com/NSLS-II/nslsii/pull/195
-* Make sync-experiment work for commissioning proposals by `@nmaytan <https://github.com/nmaytan>`_ in https://github.com/NSLS-II/nslsii/pull/196
+* Move srx caproto iocs by `@jwlodek <https://github.com/jwlodek>`_ in https://github.com/NSLS2/nslsii/pull/195
+* Make sync-experiment work for commissioning proposals by `@nmaytan <https://github.com/nmaytan>`_ in https://github.com/NSLS2/nslsii/pull/196
 
 
-**Full Changelog**: https://github.com/NSLS-II/nslsii/compare/v0.10.4...v0.10.5
+**Full Changelog**: https://github.com/NSLS2/nslsii/compare/v0.10.4...v0.10.5
 
 v0.10.4 (2024-09-18)
 ====================
