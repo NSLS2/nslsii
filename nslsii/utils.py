@@ -45,7 +45,6 @@ def open_redis_client(
     redis_url=None,
     redis_port=None,
     redis_ssl=False,
-    redis_prefix: str = "",
     redis_db: int = 0,
 ) -> Redis:
     """
@@ -55,9 +54,7 @@ def open_redis_client(
         redis_url = os.getenv("REDIS_HOST")
     if redis_url is None:
         if redis_ssl:
-            client_loc_id = (
-                redis_prefix if redis_prefix else socket.gethostname().split("-")[0]
-            )
+            client_loc_id = socket.gethostname().split("-")[0]
             client_locations = [
                 location for location in redis_hosts if client_loc_id in location
             ]
