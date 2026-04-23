@@ -4,7 +4,7 @@ import re
 import warnings
 from datetime import datetime
 from getpass import getpass
-from typing import Any, Dict, Union, Optional
+from typing import Any
 
 import httpx
 import redis
@@ -38,7 +38,7 @@ def is_commissioning_proposal(proposal_number, beamline) -> bool:
     return proposal_number in commissioning_proposals
 
 
-def validate_proposal(data_session_value, beamline) -> Dict[str, Any]:
+def validate_proposal(data_session_value, beamline) -> dict[str, Any]:
     proposal_data = {}
     data_session_match = data_session_re.match(data_session_value)
 
@@ -151,10 +151,27 @@ def should_they_be_here(username, new_data_session, beamline):
 class AuthorizationError(Exception): ...
 
 
+def _get_client(beamline: str, redis_ssl: bool, prefix: str):
+    normalized_beamlines = {
+        "sst1": "sst",
+        "sst2": "sst",
+    }
+    redis_beamline = normalized_beamlines.get(beamline.lower(), beamline.lower())
+    location = prefix if prefix else redis_beamline
+    if redis_ssl:
+        redis_client = open_redis_client(redis_ssl=redis_ssl, redis_prefix=location)
+    else:
+        redis_url = f"info.{redis_beamline}.nsls2.bnl.gov"
+        redis_client = open_redis_client(
+            redis_ssl=redis_ssl, redis_prefix=location, redis_url=redis_url
+        )
+    return redis_client
+
+
 def switch_redis_proposal(
-    proposal_number: Union[int, str],
+    proposal_number: int | str,
     beamline: str,
-    username: Optional[str] = None,
+    username: str | None = None,
     prefix: str = "",
     redis_ssl: bool = False,
     verbose: bool = False,
@@ -179,17 +196,24 @@ def switch_redis_proposal(
     md : RedisJSONDict
         The updated redis dictionary.
     """
-    normalized_beamlines = {
-        "sst1": "sst",
-        "sst2": "sst",
-    }
-    redis_beamline = normalized_beamlines.get(beamline.lower(), beamline)
-    location = prefix if prefix else redis_beamline
-    if redis_ssl:
-        redis_client = open_redis_client(redis_ssl=redis_ssl, redis_prefix=location)
-    else:
-        redis_url=f"info.{redis_beamline}.nsls2.bnl.gov"
-        redis_client = open_redis_client(redis_ssl=redis_ssl, redis_prefix=location, redis_url=redis_url)
+    redis_client = _get_client(beamline, redis_ssl, prefix)
+
+    try:
+        redis_client.ping()
+    except redis.exceptions.AuthenticationError:
+        raise RuntimeError(
+            "Redis authentication failed. Check that REDIS_PASSWORD is set "
+            "or that the password file at REDIS_SECRET_FILE (default: "
+            "/etc/bluesky/redis.secret) is correct."
+        ) from None
+    except redis.exceptions.ConnectionError as exc:
+        if not redis_ssl:
+            raise RuntimeError(
+                f"Failed to connect to redis: {exc}. "
+                "Try passing '-s' to the CLI to enable ssl."
+            ) from None
+        else:
+            raise RuntimeError(f"Failed to connect to redis: {exc}") from None
     if verbose:
         print(f"Redis connection info: {redis_client.client().connection}")
     prefix = f"{prefix}-" if prefix and not redis_ssl else ""
@@ -217,7 +241,7 @@ def switch_redis_proposal(
             )
 
         proposal_data = validate_proposal(new_data_session, beamline)
-        users = proposal_data.pop("users")
+        users = proposal_data.pop("users", [])
         pi_name = ""
         for user in users:
             if user.get("is_pi"):
@@ -246,13 +270,20 @@ def switch_redis_proposal(
     return md
 
 
-def sync_experiment(proposal_number, beamline, verbose=False, prefix="", redis_ssl=False):
+def sync_experiment(
+    proposal_number, beamline, verbose=False, prefix="", redis_ssl=False
+):
     # Authenticate the user
     username = input("Username : ")
     authenticate(username)
 
     md = switch_redis_proposal(
-        proposal_number, beamline=beamline, username=username, prefix=prefix, redis_ssl=redis_ssl, verbose=verbose
+        proposal_number,
+        beamline=beamline,
+        username=username,
+        prefix=prefix,
+        redis_ssl=redis_ssl,
+        verbose=verbose,
     )
 
     if verbose:
