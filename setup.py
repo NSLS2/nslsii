@@ -21,6 +21,7 @@ setuptools.setup(
     version=versioneer.get_version(),
     cmdclass=versioneer.get_cmdclass(),
     license="BSD (3-clause)",
+    python_requires=">=3.10",
     packages=setuptools.find_packages(),
     long_description=long_description,
     long_description_content_type='text/markdown',

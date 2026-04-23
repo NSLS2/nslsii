@@ -4,7 +4,7 @@ import re
 import warnings
 from datetime import datetime
 from getpass import getpass
-from typing import Any, Dict, Union, Optional
+from typing import Any
 
 import httpx
 import redis
@@ -38,7 +38,7 @@ def is_commissioning_proposal(proposal_number, beamline) -> bool:
     return proposal_number in commissioning_proposals
 
 
-def validate_proposal(data_session_value, beamline) -> Dict[str, Any]:
+def validate_proposal(data_session_value, beamline) -> dict[str, Any]:
     proposal_data = {}
     data_session_match = data_session_re.match(data_session_value)
 
@@ -169,9 +169,9 @@ def _get_client(beamline: str, redis_ssl: bool, prefix: str):
 
 
 def switch_redis_proposal(
-    proposal_number: Union[int, str],
+    proposal_number: int | str,
     beamline: str,
-    username: Optional[str] = None,
+    username: str | None = None,
     prefix: str = "",
     redis_ssl: bool = False,
     verbose: bool = False,
@@ -241,7 +241,7 @@ def switch_redis_proposal(
             )
 
         proposal_data = validate_proposal(new_data_session, beamline)
-        users = proposal_data.pop("users")
+        users = proposal_data.pop("users", [])
         pi_name = ""
         for user in users:
             if user.get("is_pi"):
@@ -270,13 +270,20 @@ def switch_redis_proposal(
     return md
 
 
-def sync_experiment(proposal_number, beamline, verbose=False, prefix="", redis_ssl=False):
+def sync_experiment(
+    proposal_number, beamline, verbose=False, prefix="", redis_ssl=False
+):
     # Authenticate the user
     username = input("Username : ")
     authenticate(username)
 
     md = switch_redis_proposal(
-        proposal_number, beamline=beamline, username=username, prefix=prefix, redis_ssl=redis_ssl, verbose=verbose
+        proposal_number,
+        beamline=beamline,
+        username=username,
+        prefix=prefix,
+        redis_ssl=redis_ssl,
+        verbose=verbose,
     )
 
     if verbose:
