@@ -5,10 +5,7 @@ from ophyd import (Device, Component as Cpt,
 
 _time_fmtstr = '%Y-%m-%d %H:%M:%S'
 
-
-class TwoButtonShutter(Device):
-    # TODO: this needs to be fixed in EPICS as these names make no sense
-    # the value coming out of the PV does not match what is shown in CSS
+class TwoButtonActuator(Device):
     RETRY_PERIOD = 0.5
     MAX_ATTEMPTS = 10
     open_cmd = Cpt(EpicsSignal, 'Cmd:Opn-Cmd', string=True)
@@ -97,17 +94,6 @@ class TwoButtonShutter(Device):
 
         return st
 
-    def stop(self, *, success=False):
-        import time
-        prev_st = self._set_st
-        if prev_st is not None:
-            while not prev_st.done:
-                time.sleep(.1)
-        self._was_open = (self.open_val == self.status.get())
-        st = self.set('Close')
-        while not st.done:
-            time.sleep(.5)
-
     def resume(self):
         import time
         prev_st = self._set_st
@@ -128,3 +114,21 @@ class TwoButtonShutter(Device):
         super().__init__(*args, **kwargs)
         self._set_st = None
         self.read_attrs = ['status']
+
+
+class TwoButtonActuatorAutoClose(TwoButtonActuator):
+    def stop(self, *, success=False):
+        import time
+        prev_st = self._set_st
+        if prev_st is not None:
+            while not prev_st.done:
+                time.sleep(.1)
+        self._was_open = (self.open_val == self.status.get())
+        st = self.set('Close')
+        while not st.done:
+            time.sleep(.5)
+
+class TwoButtonShutter(TwoButtonActuatorAutoClose):
+    def stop(self, *, success=False):
+        # overide the stop method to always close the shutter
+        ...
