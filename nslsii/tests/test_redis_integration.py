@@ -4,9 +4,16 @@ from unittest.mock import MagicMock, patch, mock_open
 
 import pytest
 
+import sys
+
 import nslsii
 from nslsii.utils import open_redis_client
 from nslsii.sync_experiment.sync_experiment import switch_redis_proposal
+
+# The __init__.py of nslsii.sync_experiment re-exports a function called
+# sync_experiment, which shadows the module of the same name. We need the
+# actual module object for patch.object, so grab it from sys.modules.
+_sync_mod = sys.modules["nslsii.sync_experiment.sync_experiment"]
 
 
 # ---------------------------------------------------------------------------
@@ -100,13 +107,13 @@ def test_configure_base_passes_redis_db(mock_open_rc):
 @pytest.fixture()
 def switch_mocks():
     """Patch all external dependencies of switch_redis_proposal and yield a dict of mocks."""
-    sync_experiment_module = "nslsii.sync_experiment.sync_experiment"
     with (
-        patch(f"{sync_experiment_module}.open_redis_client") as mock_open_rc,
-        patch(f"{sync_experiment_module}.RedisJSONDict", return_value={}) as mock_rjd,
-        patch(f"{sync_experiment_module}.should_they_be_here", return_value=True),
-        patch(
-            f"{sync_experiment_module}.validate_proposal",
+        patch.object(_sync_mod, "open_redis_client") as mock_open_rc,
+        patch.object(_sync_mod, "RedisJSONDict", return_value={}) as mock_rjd,
+        patch.object(_sync_mod, "should_they_be_here", return_value=True),
+        patch.object(
+            _sync_mod,
+            "validate_proposal",
             return_value={
                 "proposal_id": "123",
                 "title": "t",
@@ -114,10 +121,8 @@ def switch_mocks():
                 "users": [],
             },
         ),
-        patch(
-            f"{sync_experiment_module}.is_commissioning_proposal", return_value=False
-        ),
-        patch(f"{sync_experiment_module}.get_current_cycle", return_value="2026-1"),
+        patch.object(_sync_mod, "is_commissioning_proposal", return_value=False),
+        patch.object(_sync_mod, "get_current_cycle", return_value="2026-1"),
     ):
         yield {"open_redis_client": mock_open_rc, "RedisJSONDict": mock_rjd}
 
