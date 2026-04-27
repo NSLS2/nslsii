@@ -155,7 +155,8 @@ def switch_redis_proposal(
     proposal_number: Union[int, str],
     beamline: str,
     username: Optional[str] = None,
-    prefix: str = "",
+    endstation: str = "",
+    redis_db: int = 0,
     redis_ssl: bool = False,
     verbose: bool = False,
 ) -> RedisJSONDict:
@@ -169,9 +170,11 @@ def switch_redis_proposal(
         Beamline acronym, case-insensitive, e.g. `SMI` or `sst1`
     username : str or None
         login name of the user assigned to the proposal; if None, current user will be kept
-    prefix : str
-        optional prefix to identify a specific endstation, e.g. `opls`
-    redis_ssl : bool
+    endstation : str, optional
+        optional name identify a specific endstation, e.g. `opls`
+    redis_db : int, optional
+        optional Redis database index, defaults to 0
+    redis_ssl : bool, optional
         optional flag to enable/disable ssl connections to redis
 
     Returns
@@ -184,15 +187,32 @@ def switch_redis_proposal(
         "sst2": "sst",
     }
     redis_beamline = normalized_beamlines.get(beamline.lower(), beamline)
-    location = prefix if prefix else redis_beamline
+    location = endstation if endstation else redis_beamline
     if redis_ssl:
-        redis_client = open_redis_client(redis_ssl=redis_ssl, redis_prefix=location)
+        redis_client = open_redis_client(
+            redis_ssl=redis_ssl,
+            redis_location=location,
+            redis_db=redis_db,
+        )
+        redis_prefix = None
     else:
-        redis_url=f"info.{redis_beamline}.nsls2.bnl.gov"
-        redis_client = open_redis_client(redis_ssl=redis_ssl, redis_prefix=location, redis_url=redis_url)
+        redis_url = f"info.{redis_beamline}.nsls2.bnl.gov"
+        redis_client = open_redis_client(
+            redis_ssl=redis_ssl,
+            redis_location=location,
+            redis_url=redis_url,
+            redis_db=redis_db,
+        )
+        redis_prefix = endstation
     if verbose:
         print(f"Redis connection info: {redis_client.client().connection}")
-    prefix = f"{prefix}-" if prefix and not redis_ssl else ""
+
+    if redis_prefix and redis_ssl:
+        raise ValueError(
+            f"Incompatible arguments: '{redis_prefix=}' and '{redis_ssl=}'. Prefixes are no longer supported "
+            f"when using SSL encryption. Specify `redis_db` if you want to use a distinct set of keys with '{redis_ssl=}'."
+        )
+    prefix = f"{redis_prefix}-" if redis_prefix and not redis_ssl else ""
     md = RedisJSONDict(redis_client=redis_client, prefix=prefix)
     username = username or md.get("username")
 
@@ -246,13 +266,26 @@ def switch_redis_proposal(
     return md
 
 
-def sync_experiment(proposal_number, beamline, verbose=False, prefix="", redis_ssl=False):
+def sync_experiment(
+    proposal_number,
+    beamline,
+    verbose=False,
+    endstation="",
+    redis_db: int = 0,
+    redis_ssl=False,
+):
     # Authenticate the user
     username = input("Username : ")
     authenticate(username)
 
     md = switch_redis_proposal(
-        proposal_number, beamline=beamline, username=username, prefix=prefix, redis_ssl=redis_ssl, verbose=verbose
+        proposal_number,
+        beamline=beamline,
+        username=username,
+        endstation=endstation,
+        redis_db=redis_db,
+        redis_ssl=redis_ssl,
+        verbose=verbose,
     )
 
     if verbose:
@@ -278,10 +311,19 @@ def main():
     parser.add_argument(
         "-e",
         "--endstation",
-        dest="prefix",
+        dest="endstation",
         type=str,
         default="",
-        help="Prefix for redis keys (e.g. by endstation)",
+        help="Beamline endstation (for Redis lookup)",
+        required=False,
+    )
+    parser.add_argument(
+        "-d",
+        "--database",
+        dest="redis_db",
+        type=int,
+        default=0,
+        help="Redis database index",
         required=False,
     )
     parser.add_argument(
@@ -306,6 +348,7 @@ def main():
         proposal_number=args.proposal,
         beamline=args.beamline,
         verbose=args.verbose,
-        prefix=args.prefix,
+        endstation=args.endstation,
+        redis_db=args.redis_db,
         redis_ssl=args.redis_ssl,
     )
