@@ -489,7 +489,7 @@ def create_tiled_context(
 
 def create_api_key(tiled_context, data_sessions, beamline):
     access_tags = [data_session for data_session in data_sessions]
-    access_tags.append(f"_ROOT_NODE_{beamline.upper()}")
+    access_tags.append("public")
     scopes = ["read:data", "read:metadata", "revoke:apikeys"]
     expires_in = "7d"
     hostname = os.getenv("HOSTNAME", "unknown host")
