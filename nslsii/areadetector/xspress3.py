@@ -7,6 +7,8 @@ from collections import deque
 from pathlib import Path
 from uuid import uuid4
 
+import numpy as np
+
 from databroker.assets.handlers import Xspress3HDF5Handler
 
 from event_model import compose_resource
@@ -136,9 +138,9 @@ class Xspress3ExternalFileReference(Signal):
 
     """
 
-    def __init__(self, *args, dtype_str="uint32", bin_count=4096, dim_name="bin_count", **kwargs):
+    def __init__(self, *args, dtype_str="<u4", bin_count=4096, dim_name="bin_count", **kwargs):
         super().__init__(*args, **kwargs)
-        self.dtype_str = dtype_str
+        self.dtype_str = np.dtype(dtype_str).str
         self.shape = (bin_count,)
         self.dims = (dim_name,)
 
@@ -923,7 +925,7 @@ def build_channel_class(
 
     def get_external_file_ref(self):
         """Return the Xspress3ExternalFileReference.
-        
+
            image_data_key is an optional attribute
            if it is not present return None
         """
@@ -1142,7 +1144,7 @@ def build_xspress3_class(
 
     def get_external_file_ref(self):
         """Return the Xspress3ExternalFileReference.
-        
+
            image_data_key is an optional attribute
            if it is not present return None
         """
