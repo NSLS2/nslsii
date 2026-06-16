@@ -1,8 +1,11 @@
 """Tests for redis-related parameter changes in utils, __init__, and sync_experiment."""
 
+import os
 from unittest.mock import MagicMock, patch, mock_open
+from pathlib import Path
 
 import pytest
+from pytest_mock import MockerFixture
 
 import sys
 
@@ -155,3 +158,105 @@ def test_switch_redis_proposal_passes_redis_db(switch_mocks):
 
     call_kwargs = switch_mocks["open_redis_client"].call_args[1]
     assert call_kwargs["redis_db"] == 7
+
+
+@pytest.fixture
+def secret_file(tmp_path: Path):
+    os.environ["REDIS_SECRET_FILE"] = str(tmp_path / "secret")
+    with open(tmp_path / "secret", "w") as fp:
+        fp.write("redis_secret")
+
+
+@pytest.mark.parametrize(
+    ("url", "port", "ssl", "loc", "db", "es_acronym", "bl_acronym", "expected_url"),
+    [
+        (
+            None,
+            None,
+            True,
+            "xf28id2",
+            0,
+            None,
+            "XPD",
+            "xf28id2-xpd-redis1.nsls2.bnl.gov",
+        ),
+        (
+            None,
+            None,
+            True,
+            "xf28id2",
+            0,
+            "XPDD",
+            "XPD",
+            "xf28id2-xpdd-redis1.nsls2.bnl.gov",
+        ),
+        (None, None, False, "xf28id2", 0, None, "XPD", "info.xpd.nsls2.bnl.gov"),
+        (None, None, False, "xf28id2", 0, "XPDD", "XPD", "info.xpd.nsls2.bnl.gov"),
+        (
+            "xf28id2-xpd-redis1.nsls2.bnl.gov",
+            None,
+            True,
+            "xf28id2",
+            0,
+            None,
+            None,
+            "xf28id2-xpd-redis1.nsls2.bnl.gov",
+        ),
+        (
+            "xf28id2-xpd-redis1.nsls2.bnl.gov",
+            1234,
+            True,
+            "xf28id2",
+            0,
+            None,
+            None,
+            "xf28id2-xpd-redis1.nsls2.bnl.gov",
+        ),
+        (
+            "info.xpd.nsls2.bnl.gov",
+            None,
+            False,
+            "xf28id2",
+            0,
+            None,
+            None,
+            "info.xpd.nsls2.bnl.gov",
+        ),
+    ],
+)
+def test_open_redis_client_uses_es_bl_acronym_vars(
+    secret_file,
+    mocker: MockerFixture,
+    url: str | None,
+    port: int | None,
+    ssl: bool,
+    loc: str,
+    db: int,
+    es_acronym: str | None,
+    bl_acronym: str | None,
+    expected_url: str,
+):
+    mock_redis = mocker.patch("nslsii.utils.Redis")
+
+    expected_port = port or (6379 if not ssl else 6380)
+    if es_acronym:
+        os.environ["ENDSTATION_ACRONYM"] = es_acronym
+    if bl_acronym:
+        os.environ["BEAMLINE_ACRONYM"] = bl_acronym
+
+    open_redis_client(
+        redis_url=url, redis_port=port, redis_ssl=ssl, redis_location=loc, redis_db=db
+    )
+    mock_redis.assert_called_with(
+        host=expected_url,
+        port=expected_port,
+        ssl=ssl,
+        password="redis_secret" if ssl else None,
+        db=db,
+    )
+
+
+def test_cannot_find_client_location():
+    os.environ["BEAMLINE_ACRONYM"] = "XPD"
+    with pytest.raises(RuntimeError, match="Failed to derive redis server url"):
+        open_redis_client(redis_location="xf27id1", redis_ssl=True)

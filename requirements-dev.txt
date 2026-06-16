@@ -16,3 +16,4 @@ ruff
 doct
 pims
 pytz
+pytest-mock

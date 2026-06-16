@@ -54,6 +54,9 @@ def open_redis_client(
     if os.getenv("REDIS_HOST"):
         redis_url = os.getenv("REDIS_HOST")
     if redis_url is None:
+        endstation_acronym = os.getenv("ENDSTATION_ACRONYM")
+        beamline_acronym = os.getenv("BEAMLINE_ACRONYM")
+
         if redis_ssl:
             client_loc_id = (
                 redis_location if redis_location else socket.gethostname().split("-")[0]
@@ -61,6 +64,14 @@ def open_redis_client(
             client_locations = [
                 location for location in redis_hosts if client_loc_id in location
             ]
+            redis_host_acronym = endstation_acronym or beamline_acronym
+            if redis_host_acronym is not None:
+                client_locations = [
+                    location
+                    for location in client_locations
+                    if f"-{redis_host_acronym.lower()}-" in location
+                ]
+
             if len(client_locations) != 1:
                 raise RuntimeError(
                     "Failed to derive redis server url, please specify using the "
@@ -69,8 +80,7 @@ def open_redis_client(
             else:
                 redis_url = client_locations[0]
         else:
-            tla = os.getenv("BEAMLINE_ACRONYM").lower()
-            redis_url = f"info.{tla}.nsls2.bnl.gov"
+            redis_url = f"info.{beamline_acronym.lower()}.nsls2.bnl.gov"
 
     if redis_ssl:
         redis_pw = os.getenv("REDIS_PASSWORD")
