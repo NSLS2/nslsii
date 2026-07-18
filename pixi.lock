@@ -1455,8 +1455,10 @@ packages:
   - caproto
   - databroker
   - h5py
+  - httpx
   - ipython
   - ipywidgets
+  - ldap3
   - matplotlib
   - msgpack-numpy
   - msgpack>=1.0.0
@@ -1479,9 +1481,7 @@ packages:
   - build ; extra == 'dev'
   - coverage ; extra == 'dev'
   - doct ; extra == 'dev'
-  - httpx ; extra == 'dev'
   - ipython ; extra == 'dev'
-  - ldap3 ; extra == 'dev'
   - matplotlib ; extra == 'dev'
   - numpydoc ; extra == 'dev'
   - pims ; extra == 'dev'
@@ -1491,8 +1491,6 @@ packages:
   - ruff ; extra == 'dev'
   - sphinx ; extra == 'dev'
   - sphinx-rtd-theme ; extra == 'dev'
-  - httpx ; extra == 'sync-experiment'
-  - ldap3 ; extra == 'sync-experiment'
   requires_python: '>=3.10'
 - pypi: https://files.pythonhosted.org/packages/01/c4/4fa4c8b3097a11f3c5f09a35b72ed6855fb1d332469504962ab7bafcc702/charset_normalizer-3.4.9-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
   name: charset-normalizer
