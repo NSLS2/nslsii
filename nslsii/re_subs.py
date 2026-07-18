@@ -2,12 +2,12 @@ import json
 import os
 from pathlib import Path
 
-class BlueskyDocJSONWriter:
 
+class BlueskyDocJSONWriter:
     def __init__(self, write_directory: Path | None = None, flush_on_each_doc: bool = True):
         self._write_json_file: bool = False
         self._flush_on_each_doc = flush_on_each_doc
-        self._output_file_name: str | None  = None
+        self._output_file_name: str | None = None
         self._document_cache = []
         self._write_directory: Path = Path("/tmp")
         if write_directory is not None:
@@ -19,13 +19,9 @@ class BlueskyDocJSONWriter:
         """
 
         if not os.path.exists(write_directory):
-            raise FileNotFoundError(
-                f"Directory does not exist: {write_directory}"
-            )
+            raise FileNotFoundError(f"Directory does not exist: {write_directory}")
         elif not os.access(write_directory, os.W_OK):
-            raise PermissionError(
-                f"Cannot write to directory: {write_directory}"
-            )
+            raise PermissionError(f"Cannot write to directory: {write_directory}")
 
         self._write_directory = write_directory
 

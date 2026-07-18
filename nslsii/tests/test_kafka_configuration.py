@@ -61,12 +61,11 @@ test_bluesky_kafka_config_security_section = """\
     - "{endstation}.bluesky.runengine.{document_name}.documents"
 """
 
+
 @pytest.mark.skip(reason="bluesky kafka is deprecated.")
 def test_bluesky_kafka_config_path_env_var(tmp_path, RE, temporary_topics):
     """Test specifying a configuration file path by environment variable."""
-    with temporary_topics(topics=["abc.bluesky.runengine.documents"]) as (
-        beamline_topic,
-    ):
+    with temporary_topics(topics=["abc.bluesky.runengine.documents"]) as (beamline_topic,):
         # write a temporary file for this test
         test_config_file_path = tmp_path / "bluesky_kafka_config_content.yml"
         with open(test_config_file_path, "wt") as f:
@@ -75,13 +74,10 @@ def test_bluesky_kafka_config_path_env_var(tmp_path, RE, temporary_topics):
             f.write(f"  config_file_path: {test_config_file_path}")
 
         os.environ["BLUESKY_KAFKA_CONFIG_PATH"] = str(test_config_file_path)
-        bluesky_kafka_configuration, publisher_details = configure_kafka_publisher(
-            RE, "abc"
-        )
+        bluesky_kafka_configuration, publisher_details = configure_kafka_publisher(RE, "abc")
 
-        assert bluesky_kafka_configuration["config_file_path"] == str(
-            test_config_file_path
-        )
+        assert bluesky_kafka_configuration["config_file_path"] == str(test_config_file_path)
+
 
 @pytest.mark.skip(reason="bluesky kafka is deprecated.")
 def test_bluesky_kafka_config_path_env_var_negative(tmp_path, RE):
@@ -90,7 +86,8 @@ def test_bluesky_kafka_config_path_env_var_negative(tmp_path, RE):
     test_config_file_path = tmp_path / "bluesky_kafka_config_content.yml"
     os.environ["BLUESKY_KAFKA_CONFIG_PATH"] = str(test_config_file_path)
     with pytest.raises(FileNotFoundError, match=str(test_config_file_path)):
-        bluesky_kafka_configuration = configure_kafka_publisher(RE, "abc")
+        configure_kafka_publisher(RE, "abc")
+
 
 @pytest.mark.skip(reason="bluesky kafka is deprecated.")
 def test_bluesky_kafka_config_path_default_negative(tmp_path, RE):
@@ -104,7 +101,8 @@ def test_bluesky_kafka_config_path_default_negative(tmp_path, RE):
     if "BLUESKY_KAFKA_CONFIG_PATH" in os.environ:
         del os.environ["BLUESKY_KAFKA_CONFIG_PATH"]
     with pytest.raises(FileNotFoundError, match="/etc/bluesky/kafka.yml"):
-        bluesky_kafka_configuration = configure_kafka_publisher(RE, "abc")
+        configure_kafka_publisher(RE, "abc")
+
 
 @pytest.mark.skip(reason="bluesky kafka is deprecated.")
 def test__read_bluesky_kafka_config_file(tmp_path):
@@ -127,6 +125,7 @@ def test__read_bluesky_kafka_config_file(tmp_path):
     assert runengine_producer_config["message.timeout.ms"] == 3000
     assert runengine_producer_config["compression.codec"] == "snappy"
 
+
 @pytest.mark.skip(reason="bluesky kafka is deprecated.")
 def test__read_bluesky_kafka_config_file_producer_consumer_security(tmp_path):
     # write a temporary file for this test
@@ -142,26 +141,19 @@ def test__read_bluesky_kafka_config_file_producer_consumer_security(tmp_path):
         "kafka3:9092",
     ]
 
-    producer_consumer_security_config = bluesky_kafka_config[
-        "producer_consumer_security_config"
-    ]
+    producer_consumer_security_config = bluesky_kafka_config["producer_consumer_security_config"]
     assert len(producer_consumer_security_config) == 3
     assert producer_consumer_security_config["security.protocol"] == "SASL_SSL"
     assert producer_consumer_security_config["sasl.mechanisms"] == "PLAIN"
-    assert (
-        producer_consumer_security_config["ssl.ca.location"]
-        == "/etc/ssl/certs/ca-bundle.crt"
-    )
+    assert producer_consumer_security_config["ssl.ca.location"] == "/etc/ssl/certs/ca-bundle.crt"
 
     runengine_producer_config = bluesky_kafka_config["runengine_producer_config"]
     assert len(runengine_producer_config) == 4
     assert runengine_producer_config["compression.codec"] == "snappy"
     assert producer_consumer_security_config["security.protocol"] == "SASL_SSL"
     assert producer_consumer_security_config["sasl.mechanisms"] == "PLAIN"
-    assert (
-        producer_consumer_security_config["ssl.ca.location"]
-        == "/etc/ssl/certs/ca-bundle.crt"
-    )
+    assert producer_consumer_security_config["ssl.ca.location"] == "/etc/ssl/certs/ca-bundle.crt"
+
 
 @pytest.mark.skip(reason="bluesky kafka is deprecated.")
 def test__read_bluesky_kafka_config_file_runengine_topics(tmp_path):
@@ -175,10 +167,8 @@ def test__read_bluesky_kafka_config_file_runengine_topics(tmp_path):
     runengine_topics = bluesky_kafka_config["runengine_topics"]
     assert len(runengine_topics) == 2
     assert runengine_topics[0] == "{endstation}.bluesky.runengine.documents"
-    assert (
-        runengine_topics[1]
-        == "{endstation}.bluesky.runengine.{document_name}.documents"
-    )
+    assert runengine_topics[1] == "{endstation}.bluesky.runengine.{document_name}.documents"
+
 
 @pytest.mark.skip(reason="bluesky kafka is deprecated.")
 def test__read_bluesky_kafka_config_file_failure(tmp_path):
@@ -190,6 +180,7 @@ def test__read_bluesky_kafka_config_file_failure(tmp_path):
 
     with pytest.raises(FileNotFoundError, match=str(test_config_file_path)):
         _read_bluesky_kafka_config_file(str(test_config_file_path))
+
 
 @pytest.mark.skip(reason="bluesky kafka is deprecated.")
 def test__read_bluesky_kafka_config_file_missing_sections(tmp_path):
@@ -209,6 +200,7 @@ def test__read_bluesky_kafka_config_file_missing_sections(tmp_path):
     ):
         _read_bluesky_kafka_config_file(str(test_config_file_path))
 
+
 @pytest.mark.skip(reason="bluesky kafka is deprecated.")
 def test_configure_kafka_publisher_abort_run_true(tmp_path, RE):
     """Test Kafka publisher is configured correctly in the case
@@ -225,10 +217,9 @@ def test_configure_kafka_publisher_abort_run_true(tmp_path, RE):
 
     assert publisher_details.__class__.__name__ == "SubscribeKafkaPublisherDetails"
     assert publisher_details.beamline_topic == "abc.bluesky.runengine.documents"
-    assert (
-        publisher_details.bootstrap_servers == "localhost:9092,kafka1:9092,kafka2:9092"
-    )
+    assert publisher_details.bootstrap_servers == "localhost:9092,kafka1:9092,kafka2:9092"
     assert publisher_details.re_subscribe_token == 0
+
 
 @pytest.mark.skip(reason="bluesky kafka is deprecated.")
 def test_configure_kafka_publisher_abort_run_false(tmp_path, RE):
@@ -244,12 +235,7 @@ def test_configure_kafka_publisher_abort_run_false(tmp_path, RE):
         RE, "abc", override_config_path=test_config_file_path
     )
 
-    assert (
-        publisher_details.__class__.__name__
-        == "SubscribeKafkaQueueThreadPublisherDetails"
-    )
+    assert publisher_details.__class__.__name__ == "SubscribeKafkaQueueThreadPublisherDetails"
     assert publisher_details.beamline_topic == "abc.bluesky.runengine.documents"
-    assert (
-        publisher_details.bootstrap_servers == "localhost:9092,kafka1:9092,kafka2:9092"
-    )
+    assert publisher_details.bootstrap_servers == "localhost:9092,kafka1:9092,kafka2:9092"
     assert publisher_details.re_subscribe_token is None

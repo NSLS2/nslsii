@@ -2,9 +2,10 @@ import time as ttime
 import itertools
 import logging
 
-from ophyd.device import (DeviceStatus, BlueskyInterface, Staged,
-                          Component as Cpt, Device)
-from ophyd import (Signal, )
+from ophyd.device import DeviceStatus, BlueskyInterface, Staged, Component as Cpt, Device
+from ophyd import (
+    Signal,
+)
 from ophyd.areadetector.filestore_mixins import FileStoreIterativeWrite
 
 
@@ -19,49 +20,41 @@ class TriggerBase(BlueskyInterface):
 
         # If acquiring, stop.
         self.stage_sigs[self.cam.acquire] = 0
-        self.stage_sigs[self.cam.image_mode] = 'Multiple'
+        self.stage_sigs[self.cam.image_mode] = "Multiple"
         self._acquisition_signal = self.cam.acquire
 
         self._status = None
 
 
 class ModalSettings(Device):
-    mode = Cpt(Signal, value='internal',
-               doc='Triggering mode (internal/external)')
-    scan_type = Cpt(Signal, value='step',
-                    doc='Scan type (step/fly)')
-    make_directories = Cpt(Signal, value=True,
-                           doc='Make directories on the DAQ side')
-    total_points = Cpt(Signal, value=2,
-                       doc='The total number of points to acquire overall')
-    triggers = Cpt(Signal, value=None,
-                   doc='Detector instances which this one triggers')
+    mode = Cpt(Signal, value="internal", doc="Triggering mode (internal/external)")
+    scan_type = Cpt(Signal, value="step", doc="Scan type (step/fly)")
+    make_directories = Cpt(Signal, value=True, doc="Make directories on the DAQ side")
+    total_points = Cpt(Signal, value=2, doc="The total number of points to acquire overall")
+    triggers = Cpt(Signal, value=None, doc="Detector instances which this one triggers")
 
 
 class ModalBase(Device):
-    mode_settings = Cpt(ModalSettings, '')
-    count_time = Cpt(Signal, value=1.0,
-                     doc='Exposure/count time, as specified by bluesky')
+    mode_settings = Cpt(ModalSettings, "")
+    count_time = Cpt(Signal, value=1.0, doc="Exposure/count time, as specified by bluesky")
 
     def mode_setup(self, mode):
         devices = [self] + [getattr(self, attr) for attr in self._sub_devices]
-        attr = 'mode_{}'.format(mode)
+        attr = "mode_{}".format(mode)
         for dev in devices:
             if hasattr(dev, attr):
                 mode_setup_method = getattr(dev, attr)
                 mode_setup_method()
 
     def mode_internal(self):
-        logger.debug('%s internal triggering %s', self.name,
-                     self.mode_settings.get())
+        logger.debug("%s internal triggering %s", self.name, self.mode_settings.get())
 
     def mode_external(self):
-        logger.debug('%s external triggering %s', self.name,
-                     self.mode_settings.get())
+        logger.debug("%s external triggering %s", self.name, self.mode_settings.get())
 
     @property
     def mode(self):
-        '''Trigger mode (external/internal)'''
+        """Trigger mode (external/internal)"""
         return self.mode_settings.mode.get()
 
     def stage(self):
@@ -71,9 +64,8 @@ class ModalBase(Device):
         return super().stage()
 
     def unstage(self):
-        if self.mode == 'external':
-            logger.debug('[Unstage] Stopping externally-triggered detector %s',
-                         self.name)
+        if self.mode == "external":
+            logger.debug("[Unstage] Stopping externally-triggered detector %s", self.name)
             self.stop(success=True)
 
         super().unstage()
@@ -83,7 +75,7 @@ class ModalTrigger(ModalBase, TriggerBase):
     def __init__(self, *args, image_name=None, **kwargs):
         super().__init__(*args, **kwargs)
         if image_name is None:
-            image_name = '_'.join([self.name, 'image'])
+            image_name = "_".join([self.name, "image"])
         self._image_name = image_name
         self._external_acquire_at_stage = True
 
@@ -100,8 +92,8 @@ class ModalTrigger(ModalBase, TriggerBase):
         ordered_dict_move_to_beginning(cam.stage_sigs, cam.acquire)
 
         cam.stage_sigs[cam.num_images] = 1
-        cam.stage_sigs[cam.image_mode] = 'Single'
-        cam.stage_sigs[cam.trigger_mode] = 'Internal'
+        cam.stage_sigs[cam.image_mode] = "Single"
+        cam.stage_sigs[cam.trigger_mode] = "Internal"
 
     def mode_external(self):
         super().mode_external()
@@ -109,8 +101,8 @@ class ModalTrigger(ModalBase, TriggerBase):
 
         cam = self.cam
         cam.stage_sigs[cam.num_images] = total_points
-        cam.stage_sigs[cam.image_mode] = 'Multiple'
-        cam.stage_sigs[cam.trigger_mode] = 'External'
+        cam.stage_sigs[cam.image_mode] = "Multiple"
+        cam.stage_sigs[cam.trigger_mode] = "External"
 
     def stage(self):
         self._acquisition_signal.subscribe(self._acquire_changed)
@@ -118,7 +110,7 @@ class ModalTrigger(ModalBase, TriggerBase):
 
         # In external triggering mode, the devices is only triggered once at
         # stage
-        if self.mode == 'external' and self._external_acquire_at_stage:
+        if self.mode == "external" and self._external_acquire_at_stage:
             self._acquisition_signal.put(1, wait=False)
         return staged
 
@@ -130,8 +122,7 @@ class ModalTrigger(ModalBase, TriggerBase):
 
     def trigger_internal(self):
         if self._staged != Staged.yes:
-            raise RuntimeError("This detector is not ready to trigger."
-                               "Call the stage() method before triggering.")
+            raise RuntimeError("This detector is not ready to trigger.Call the stage() method before triggering.")
 
         self._status = DeviceStatus(self)
         self._acquisition_signal.put(1, wait=False)
@@ -140,23 +131,22 @@ class ModalTrigger(ModalBase, TriggerBase):
 
     def trigger_external(self):
         if self._staged != Staged.yes:
-            raise RuntimeError("This detector is not ready to trigger."
-                               "Call the stage() method before triggering.")
+            raise RuntimeError("This detector is not ready to trigger.Call the stage() method before triggering.")
 
         self._status = DeviceStatus(self)
         self._status._finished()
         # TODO this timestamp is inaccurate!
-        if self.mode_settings.scan_type.get() != 'fly':
+        if self.mode_settings.scan_type.get() != "fly":
             # Don't dispatch images for fly-scans-they are bulk read at the end
             self.generate_datum(self._image_name, ttime.time(), {})
         return self._status
 
     def trigger(self):
-        mode_trigger = getattr(self, f'trigger_{self.mode}')
+        mode_trigger = getattr(self, f"trigger_{self.mode}")
         return mode_trigger()
 
     def _acquire_changed(self, value=None, old_value=None, **kwargs):
-        '''This is called when the 'acquire' signal changes.'''
+        """This is called when the 'acquire' signal changes."""
         if self._status is None:
             return
         if (old_value == 1) and (value == 0):
@@ -165,7 +155,6 @@ class ModalTrigger(ModalBase, TriggerBase):
 
 
 class FileStoreBulkReadable(FileStoreIterativeWrite):
-
     def _reset_data(self):
         self._datum_uids.clear()
         self._point_counter = itertools.count()
@@ -173,8 +162,7 @@ class FileStoreBulkReadable(FileStoreIterativeWrite):
     def bulk_read(self, timestamps):
         image_name = self.image_name
 
-        uids = [self.generate_datum(self.image_name, ts, {})
-                for ts in timestamps]
+        uids = [self.generate_datum(self.image_name, ts, {}) for ts in timestamps]
 
         # clear so unstage will not save the images twice:
         self._reset_data()

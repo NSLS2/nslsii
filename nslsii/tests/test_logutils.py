@@ -100,9 +100,7 @@ def test_configure_bluesky_logging_creates_default_dir():
     ip = IPython.core.interactiveshell.InteractiveShell()
     os.environ.pop("BLUESKY_LOG_FILE", default=None)
 
-    bluesky_log_file_path = configure_bluesky_logging(
-        ipython=ip, appdirs_appname=test_appname
-    )
+    bluesky_log_file_path = configure_bluesky_logging(ipython=ip, appdirs_appname=test_appname)
     assert bluesky_log_file_path == log_file_path
     assert log_file_path.exists()
 
@@ -127,9 +125,7 @@ def test_configure_bluesky_logging_existing_default_dir():
     ip = IPython.core.interactiveshell.InteractiveShell()
     os.environ.pop("BLUESKY_LOG_FILE", default=None)
 
-    bluesky_log_file_path = configure_bluesky_logging(
-        ipython=ip, appdirs_appname=test_appname
-    )
+    bluesky_log_file_path = configure_bluesky_logging(ipython=ip, appdirs_appname=test_appname)
     assert bluesky_log_file_path == log_file_path
     assert log_file_path.exists()
 
@@ -181,9 +177,7 @@ def test_configure_bluesky_logging_propagate_true(tmpdir):
 
     ip = IPython.core.interactiveshell.InteractiveShell()
     os.environ["BLUESKY_LOG_FILE"] = str(log_file_path)
-    bluesky_log_file_path = configure_bluesky_logging(
-        ipython=ip, propagate_log_messages=True
-    )
+    bluesky_log_file_path = configure_bluesky_logging(ipython=ip, propagate_log_messages=True)
 
     logging.getLogger("bluesky").info("bluesky log message")
     logging.getLogger("caproto").info("caproto log message")
@@ -214,12 +208,7 @@ def test_configure_bluesky_logging_syslog_logging(tmpdir):
     ip = IPython.core.interactiveshell.InteractiveShell()
     configure_bluesky_logging(ipython=ip)
     for logger_name in ("bluesky", "caproto", "nslsii", "ophyd", ip.log.name):
-        assert any(
-            [
-                isinstance(handler, SysLogHandler)
-                for handler in logging.getLogger(logger_name).handlers
-            ]
-        )
+        assert any([isinstance(handler, SysLogHandler) for handler in logging.getLogger(logger_name).handlers])
 
     # remember the time so we can ask journalctl for only the most recent log messages
     time_before_logging = datetime.datetime.now().time().isoformat(timespec="seconds")

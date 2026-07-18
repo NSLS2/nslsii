@@ -32,6 +32,6 @@ def notebook_to_nbviewer():
     js = _js_callback_open + _js
     html = '<script type="text/javascript">'
     html += js
-    html += '</script>'
-    html += '<b>nbviewer will open in a new tab in 20 seconds .....</b>'
+    html += "</script>"
+    html += "<b>nbviewer will open in a new tab in 20 seconds .....</b>"
     return display(HTML(html))

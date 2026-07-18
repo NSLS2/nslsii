@@ -24,9 +24,7 @@ _sync_mod = sys.modules["nslsii.sync_experiment.sync_experiment"]
 @patch("nslsii.utils.os.getenv", return_value=None)
 @patch("nslsii.utils.socket.gethostname", return_value="xf12id1-ws1")
 @patch("nslsii.utils.Redis")
-def test_open_redis_client_uses_redis_location_for_ssl(
-    mock_redis, mock_hostname, mock_getenv
-):
+def test_open_redis_client_uses_redis_location_for_ssl(mock_redis, mock_hostname, mock_getenv):
     """redis_location should override hostname-based lookup when using SSL."""
     # "opls" matches "xf12id1-opls-redis1.nsls2.bnl.gov" in redis_hosts
     with patch("builtins.open", mock_open(read_data="secret")):
@@ -138,9 +136,7 @@ def test_switch_redis_proposal_ssl_no_prefix(switch_mocks):
 
 def test_switch_redis_proposal_endstation_no_ssl(switch_mocks):
     """With endstation set and redis_ssl=False the prefix should be '{endstation}-'."""
-    switch_redis_proposal(
-        123456, beamline="SMI", username="testuser", endstation="opls", redis_ssl=False
-    )
+    switch_redis_proposal(123456, beamline="SMI", username="testuser", endstation="opls", redis_ssl=False)
 
     mock_rjd = switch_mocks["RedisJSONDict"]
     mock_rjd.assert_called_once()
@@ -149,9 +145,7 @@ def test_switch_redis_proposal_endstation_no_ssl(switch_mocks):
 
 def test_switch_redis_proposal_passes_redis_db(switch_mocks):
     """redis_db should be forwarded to open_redis_client."""
-    switch_redis_proposal(
-        123456, beamline="SMI", username="testuser", redis_db=7, redis_ssl=False
-    )
+    switch_redis_proposal(123456, beamline="SMI", username="testuser", redis_db=7, redis_ssl=False)
 
     call_kwargs = switch_mocks["open_redis_client"].call_args[1]
     assert call_kwargs["redis_db"] == 7

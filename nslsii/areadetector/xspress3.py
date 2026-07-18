@@ -104,9 +104,7 @@ class Xspress3Trigger(Device):
     def trigger(self):
         logger.debug("trigger")
         if self._staged != Staged.yes:
-            raise RuntimeError(
-                "tried to trigger Xspress3 with prefix {self.prefix} but it is not staged"
-            )
+            raise RuntimeError("tried to trigger Xspress3 with prefix {self.prefix} but it is not staged")
 
         self._acquire_status = self.new_acquire_status()
         self.cam.acquire.put(1, wait=False)
@@ -124,7 +122,7 @@ class Xspress3Trigger(Device):
 
 
 class Xspress3ExternalFileReference(Signal):
-    """ A special Signal for datum document information.
+    """A special Signal for datum document information.
 
     Parameters
     ----------
@@ -269,7 +267,7 @@ class Xspress3HDF5Plugin(HDF5Plugin):
         the_full_data_dir_path = self._build_data_dir_path(
             the_datetime=datetime.datetime.now(),
             root_path=self.root_path.get(),
-            path_template=self.path_template.get()
+            path_template=self.path_template.get(),
         )
         self.file_path.set(the_full_data_dir_path).wait()
         # 3. set file_name to a uuid
@@ -284,9 +282,7 @@ class Xspress3HDF5Plugin(HDF5Plugin):
         file_number = self.file_number.get()
         # the next line assembles file_path, file_name, and file_number
         #   in the same way as AreaDetector
-        full_file_path = Path(
-            self.stage_sigs[self.file_template] % (file_path, file_name, file_number)
-        )
+        full_file_path = Path(self.stage_sigs[self.file_template] % (file_path, file_name, file_number))
         # 6. strip root_path from the full file path to produce the resource_path needed by compose_resource
         # for example, if
         #   full_file_path is /a/b/c/d_0.h5
@@ -342,9 +338,7 @@ class Xspress3HDF5Plugin(HDF5Plugin):
 
         # generate datum document for "bulk" image data (the whole array)
         if self.parent.get_external_file_ref() and self.parent.get_external_file_ref().kind & Kind.normal:
-            bulk_data_datum = self._bulk_data_datum_factory(
-                datum_kwargs={}
-            )
+            bulk_data_datum = self._bulk_data_datum_factory(datum_kwargs={})
             self._asset_docs_cache.append(("datum", bulk_data_datum))
             self.parent.get_external_file_ref().put(bulk_data_datum["datum_id"])
 
@@ -404,9 +398,7 @@ class Xspress3FileStore(FileStorePluginBase, HDF5Plugin):
         super().__init__(basename, parent=parent, **kwargs)
 
         if not isinstance(parent, Xspress3Detector):
-            raise TypeError(
-                "parent must be an instance of ophyd.areadetector.Xspress3Detector"
-            )
+            raise TypeError("parent must be an instance of ophyd.areadetector.Xspress3Detector")
 
         # establish PV values to be set when this detector is staged
         # the original values will be replaced when it is unstaged
@@ -421,9 +413,7 @@ class Xspress3FileStore(FileStorePluginBase, HDF5Plugin):
         self._filestore_res = None
         # JL: what are mds_keys?
         self.mds_keys = {
-            channel.channel_number: mds_key_format.format(
-                self=self, channel_number=channel.channel_number
-            )
+            channel.channel_number: mds_key_format.format(self=self, channel_number=channel.channel_number)
             for channel in parent.iterate_channels()
         }
 
@@ -470,15 +460,11 @@ class Xspress3FileStore(FileStorePluginBase, HDF5Plugin):
 
         external_trig_reading = self.parent.external_trig.get()
         if external_trig_reading:
-            logger.debug(
-                "Xspress3 '%s' will be triggered externally", self.parent.prefix
-            )
+            logger.debug("Xspress3 '%s' will be triggered externally", self.parent.prefix)
             self.stage_sigs[self.parent.cam.trigger_mode] = "TTL Veto Only"
             self.stage_sigs[self.parent.cam.num_images] = total_capture
         else:
-            logger.debug(
-                "Xspress3 '%s' will be triggered internally", self.parent.prefix
-            )
+            logger.debug("Xspress3 '%s' will be triggered internally", self.parent.prefix)
             self.stage_sigs[self.parent.cam.trigger_mode] = "Internal"
             # JL: why not total_capture as above?
             self.stage_sigs[self.parent.cam.num_images] = spectra_per_point_reading
@@ -606,9 +592,7 @@ class Xspress3FileStore(FileStorePluginBase, HDF5Plugin):
                     }
                 )
                 self.mds_keys[channel.channel_number] = key
-                super().generate_datum(
-                    key=key, timestamp=timestamp, datum_kwargs=datum_kwargs
-                )
+                super().generate_datum(key=key, timestamp=timestamp, datum_kwargs=datum_kwargs)
                 # we are done
                 return
             else:
@@ -617,8 +601,7 @@ class Xspress3FileStore(FileStorePluginBase, HDF5Plugin):
         # we have a problem
         # the `key` parameter did not match any of our channels
         raise ValueError(
-            f"failed to find channel with name '{key}' "
-            f"on Xspress3 detector with PV prefix '{self.parent.prefix}'"
+            f"failed to find channel with name '{key}' on Xspress3 detector with PV prefix '{self.parent.prefix}'"
         )
 
     # JL: is there any reason to keep this?
@@ -640,10 +623,7 @@ class Xspress3FileStore(FileStorePluginBase, HDF5Plugin):
         #     key = self.mds_keys[chan]
         #     desc[key] = spec_desc
 
-        return {
-            self.mds_keys[channel.channel_number]: spec_desc
-            for channel in self.parent.iterate_channels()
-        }
+        return {self.mds_keys[channel.channel_number]: spec_desc for channel in self.parent.iterate_channels()}
 
 
 # start new IOC classes
@@ -687,9 +667,7 @@ class McaRoi(ADBase):
     # eg XF:05IDD-ES{Xsp:3}:MCA1ROI:1:TSTotal
     ts_total = Cpt(EpicsSignal, "TSTotal")
 
-    mcaroi_prefix_re = re.compile(
-        r"MCA(?P<channel_number>\d+)ROI:(?P<mcaroi_number>\d+):"
-    )
+    mcaroi_prefix_re = re.compile(r"MCA(?P<channel_number>\d+)ROI:(?P<mcaroi_number>\d+):")
 
     def __init__(self, prefix, *args, **kwargs):
         super().__init__(prefix, *args, **kwargs)
@@ -759,8 +737,7 @@ class McaRoi(ADBase):
 
         if configuration_changed:
             logger.debug(
-                "Setting up Xspress3 ROI: name=%s ev_min=%s ev_size=%s "
-                "use=%s prefix=%s channel=%s",
+                "Setting up Xspress3 ROI: name=%s ev_min=%s ev_size=%s use=%s prefix=%s channel=%s",
                 self.name,
                 ev_min,
                 ev_size,
@@ -818,17 +795,13 @@ def _validate_mcaroi_number(mcaroi_number):
     if not isinstance(mcaroi_number, int):
         raise ValueError(f"MCAROI number '{mcaroi_number}' is not an integer")
     elif not 1 <= mcaroi_number <= 48:
-        raise ValueError(
-            f"MCAROI number '{mcaroi_number}' is outside the allowed interval [1,48]"
-        )
+        raise ValueError(f"MCAROI number '{mcaroi_number}' is outside the allowed interval [1,48]")
     else:
         # everything is awesome
         pass
 
 
-def build_channel_class(
-    channel_number, mcaroi_numbers, image_data_key=None, channel_parent_classes=None
-):
+def build_channel_class(channel_number, mcaroi_numbers, image_data_key=None, channel_parent_classes=None):
     """Build an Xspress3 channel class with the specified channel number and MCAROI numbers.
 
     MCAROI numbers need not be consecutive.
@@ -926,8 +899,8 @@ def build_channel_class(
     def get_external_file_ref(self):
         """Return the Xspress3ExternalFileReference.
 
-           image_data_key is an optional attribute
-           if it is not present return None
+        image_data_key is an optional attribute
+        if it is not present return None
         """
         if image_data_key:
             return getattr(self, image_data_key)
@@ -957,9 +930,7 @@ def build_channel_class(
 
     # Xspress3ExternalFileReference is optional
     if image_data_key:
-        channel_fields_and_methods[image_data_key] = Cpt(
-            Xspress3ExternalFileReference, kind=Kind.normal
-        )
+        channel_fields_and_methods[image_data_key] = Cpt(Xspress3ExternalFileReference, kind=Kind.normal)
 
     channel_fields_and_methods.update(
         {
@@ -972,9 +943,7 @@ def build_channel_class(
         }
     )
 
-    return type(
-        "GeneratedXspress3Channel", channel_parent_classes, channel_fields_and_methods
-    )
+    return type("GeneratedXspress3Channel", channel_parent_classes, channel_fields_and_methods)
 
 
 def _validate_channel_number(channel_number):
@@ -992,9 +961,7 @@ def _validate_channel_number(channel_number):
     if not isinstance(channel_number, int):
         raise ValueError(f"channel number '{channel_number}' is not an integer")
     elif not 1 <= channel_number <= 16:
-        raise ValueError(
-            f"channel number '{channel_number}' is outside the allowed interval [1,16]"
-        )
+        raise ValueError(f"channel number '{channel_number}' is outside the allowed interval [1,16]")
     else:
         # everything is great
         pass
@@ -1006,9 +973,7 @@ def build_detector_class(
     detector_parent_classes=None,
     extra_class_members=None,
 ):
-    raise NotImplementedError(
-        "build_detector_class() has been removed, use build_xspress3_class()"
-    )
+    raise NotImplementedError("build_detector_class() has been removed, use build_xspress3_class()")
 
 
 def build_xspress3_class(
@@ -1126,8 +1091,7 @@ def build_xspress3_class(
             return getattr(self, f"channel{channel_number:02d}")
         except AttributeError as ae:
             raise ValueError(
-                f"no channel on detector with prefix '{self.prefix}' "
-                f"has number {channel_number}"
+                f"no channel on detector with prefix '{self.prefix}' has number {channel_number}"
             ) from ae
 
     def iterate_channels(self):
@@ -1145,8 +1109,8 @@ def build_xspress3_class(
     def get_external_file_ref(self):
         """Return the Xspress3ExternalFileReference.
 
-           image_data_key is an optional attribute
-           if it is not present return None
+        image_data_key is an optional attribute
+        if it is not present return None
         """
         if image_data_key:
             return getattr(self, image_data_key)
@@ -1162,12 +1126,8 @@ def build_xspress3_class(
                 value=-1,
                 doc="The total number of points to acquire overall",
             ),
-            "spectra_per_point": Cpt(
-                Signal, value=1, doc="Number of spectra per point"
-            ),
-            "make_directories": Cpt(
-                Signal, value=False, doc="Make directories on the Xspress3 side"
-            ),
+            "spectra_per_point": Cpt(Signal, value=1, doc="Number of spectra per point"),
+            "make_directories": Cpt(Signal, value=False, doc="Make directories on the Xspress3 side"),
             "rewindable": Cpt(
                 Signal,
                 value=False,
@@ -1184,9 +1144,7 @@ def build_xspress3_class(
 
     # Xspress3ExternalFileReference is optional
     if image_data_key:
-        xspress3_fields_and_methods[image_data_key] = Cpt(
-            Xspress3ExternalFileReference, kind=Kind.normal
-        )
+        xspress3_fields_and_methods[image_data_key] = Cpt(Xspress3ExternalFileReference, kind=Kind.normal)
 
     xspress3_fields_and_methods.update(
         {

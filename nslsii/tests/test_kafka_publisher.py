@@ -11,6 +11,7 @@ from bluesky.plans import count
 from bluesky_kafka import BlueskyKafkaException
 from event_model import sanitize_doc
 
+
 @pytest.mark.skip(reason="bluesky kafka is deprecated.")
 def test__subscribe_kafka_publisher(
     kafka_bootstrap_servers,
@@ -61,21 +62,16 @@ def test__subscribe_kafka_publisher(
 
     # use a random string as the beamline name so topics will not be duplicated across tests
     beamline_name = str(uuid.uuid4())[:8]
-    with temporary_topics(topics=[f"{beamline_name}.bluesky.runengine.documents"]) as (
-        beamline_topic,
-    ):
-
-        subscribe_kafka_publisher_details = (
-            nslsii.kafka_utils._subscribe_kafka_publisher(
-                RE=RE,
-                beamline_name=beamline_name,
-                bootstrap_servers=kafka_bootstrap_servers,
-                producer_config={
-                    "acks": "all",
-                    "enable.idempotence": False,
-                    "request.timeout.ms": 1000,
-                },
-            )
+    with temporary_topics(topics=[f"{beamline_name}.bluesky.runengine.documents"]) as (beamline_topic,):
+        subscribe_kafka_publisher_details = nslsii.kafka_utils._subscribe_kafka_publisher(
+            RE=RE,
+            beamline_name=beamline_name,
+            bootstrap_servers=kafka_bootstrap_servers,
+            producer_config={
+                "acks": "all",
+                "enable.idempotence": False,
+                "request.timeout.ms": 1000,
+            },
         )
 
         assert subscribe_kafka_publisher_details.beamline_topic == beamline_topic
@@ -96,34 +92,24 @@ def test__subscribe_kafka_publisher(
         # documents: start, descriptor, event, stop
         assert len(published_bluesky_documents) == 4
 
-        consumed_bluesky_documents = (
-            consume_documents_from_kafka_until_first_stop_document(
-                kafka_topic=subscribe_kafka_publisher_details.beamline_topic
-            )
+        consumed_bluesky_documents = consume_documents_from_kafka_until_first_stop_document(
+            kafka_topic=subscribe_kafka_publisher_details.beamline_topic
         )
 
         assert len(published_bluesky_documents) == len(consumed_bluesky_documents)
 
         # sanitize_doc normalizes some document data, such as numpy arrays, that are
         # problematic for direct comparison of documents by 'assert'
-        sanitized_published_bluesky_documents = [
-            sanitize_doc(doc) for doc in published_bluesky_documents
-        ]
-        sanitized_consumed_bluesky_documents = [
-            sanitize_doc(doc) for doc in consumed_bluesky_documents
-        ]
+        sanitized_published_bluesky_documents = [sanitize_doc(doc) for doc in published_bluesky_documents]
+        sanitized_consumed_bluesky_documents = [sanitize_doc(doc) for doc in consumed_bluesky_documents]
 
-        assert len(sanitized_consumed_bluesky_documents) == len(
-            sanitized_published_bluesky_documents
-        )
+        assert len(sanitized_consumed_bluesky_documents) == len(sanitized_published_bluesky_documents)
 
         # the Kafka publisher will publish event_page rather than event
         #  so check start, descriptor, and stop documents only
         for i in (0, 1, 3):
-            assert (
-                sanitized_consumed_bluesky_documents[i]
-                == sanitized_published_bluesky_documents[i]
-            )
+            assert sanitized_consumed_bluesky_documents[i] == sanitized_published_bluesky_documents[i]
+
 
 @pytest.mark.skip(reason="bluesky kafka is deprecated.")
 def test_no_broker(
@@ -147,21 +133,16 @@ def test_no_broker(
 
     # use a random string as the beamline name so topics will not be duplicated across tests
     beamline_name = str(uuid.uuid4())[:8]
-    with temporary_topics(topics=[f"{beamline_name}.bluesky.runengine.documents"]) as (
-        beamline_topic,
-    ):
-
-        subscribe_kafka_publisher_details = (
-            nslsii.kafka_utils._subscribe_kafka_publisher(
-                RE=RE,
-                beamline_name=beamline_name,
-                bootstrap_servers="100.100.100.100:9092",
-                producer_config={
-                    "acks": "all",
-                    "enable.idempotence": False,
-                    "request.timeout.ms": 1000,
-                },
-            )
+    with temporary_topics(topics=[f"{beamline_name}.bluesky.runengine.documents"]) as (beamline_topic,):
+        subscribe_kafka_publisher_details = nslsii.kafka_utils._subscribe_kafka_publisher(
+            RE=RE,
+            beamline_name=beamline_name,
+            bootstrap_servers="100.100.100.100:9092",
+            producer_config={
+                "acks": "all",
+                "enable.idempotence": False,
+                "request.timeout.ms": 1000,
+            },
         )
 
         assert subscribe_kafka_publisher_details.beamline_topic == beamline_topic
@@ -182,6 +163,7 @@ def test_no_broker(
         # only a stop document is expected ???
         assert len(published_bluesky_documents) == 1
         assert published_bluesky_documents[0][0] == "stop"
+
 
 @pytest.mark.skip(reason="bluesky kafka is deprecated.")
 def test_exception_on_publisher_call(
@@ -209,9 +191,7 @@ def test_exception_on_publisher_call(
 
     # use a random string as the beamline name so topics will not be duplicated across tests
     beamline_name = str(uuid.uuid4())[:8]
-    with temporary_topics(topics=[f"{beamline_name}.bluesky.runengine.documents"]) as (
-        beamline_topic,
-    ):
+    with temporary_topics(topics=[f"{beamline_name}.bluesky.runengine.documents"]) as (beamline_topic,):
 
         def mock_publisher_factory(*args, **kwargs):
             # the mock publisher will raise BlueskyKafkaException on every method call

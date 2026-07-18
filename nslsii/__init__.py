@@ -2,6 +2,7 @@ import logging
 import os
 import sys
 import warnings
+from importlib.metadata import PackageNotFoundError, version
 from logging.handlers import SysLogHandler, TimedRotatingFileHandler
 from pathlib import Path
 
@@ -9,10 +10,14 @@ import appdirs
 from IPython import get_ipython
 
 from .utils import open_redis_client
-from ._version import get_versions
 
-__version__ = get_versions()["version"]
-del get_versions
+try:
+    from ._version import __version__
+except ImportError:
+    try:
+        __version__ = version("nslsii")
+    except PackageNotFoundError:
+        __version__ = "unknown"
 
 
 bluesky_log_file_path = None
@@ -146,7 +151,6 @@ def configure_base(
     if redis_url is None:
         md = {}
     else:
-        from redis import Redis
         from redis_json_dict import RedisJSONDict
 
         redis_client = open_redis_client(
@@ -313,9 +317,7 @@ def configure_base(
     return list(ns)
 
 
-def configure_bluesky_logging(
-    ipython, appdirs_appname="bluesky", propagate_log_messages=False
-):
+def configure_bluesky_logging(ipython, appdirs_appname="bluesky", propagate_log_messages=False):
     """
     Configure a TimedRotatingFileHandler log handler and attach it to
     bluesky, ophyd, caproto, and nslsii loggers. In addition, by default set
@@ -373,14 +375,9 @@ def configure_bluesky_logging(
 
     logging_handlers = []
 
-    log_file_handler = TimedRotatingFileHandler(
-        filename=str(bluesky_log_file_path), when="W0", backupCount=10
-    )
+    log_file_handler = TimedRotatingFileHandler(filename=str(bluesky_log_file_path), when="W0", backupCount=10)
     log_file_handler.setLevel("INFO")
-    log_file_format = (
-        "[%(levelname)1.1s %(asctime)s.%(msecs)03d %(name)s"
-        "  %(module)s:%(lineno)d] %(message)s"
-    )
+    log_file_format = "[%(levelname)1.1s %(asctime)s.%(msecs)03d %(name)s  %(module)s:%(lineno)d] %(message)s"
     log_file_handler.setFormatter(logging.Formatter(fmt=log_file_format))
     logging_handlers.append(log_file_handler)
 
@@ -388,9 +385,7 @@ def configure_bluesky_logging(
         syslog_handler = SysLogHandler(address=address)
         syslog_handler.setLevel(logging.INFO)
         # no need to log date and time, systemd does that
-        formatter = logging.Formatter(
-            "%(name)s[%(process)s]: %(levelname)s - %(module)s:%(lineno)d] %(message)s"
-        )
+        formatter = logging.Formatter("%(name)s[%(process)s]: %(levelname)s - %(module)s:%(lineno)d] %(message)s")
         # add formatter to syslog_handler
         syslog_handler.setFormatter(formatter)
         return syslog_handler
@@ -420,9 +415,7 @@ def configure_bluesky_logging(
     return bluesky_log_file_path
 
 
-def configure_ipython_logging(
-    exception_logger, ipython, rotate_file_size=100000, appdirs_appname="bluesky"
-):
+def configure_ipython_logging(exception_logger, ipython, rotate_file_size=100000, appdirs_appname="bluesky"):
     """
     Configure IPython output logging with logstart and IPython exception logging with set_custom_exc(...).
 
@@ -466,9 +459,7 @@ def configure_ipython_logging(
         bluesky_ipython_log_dir = Path(appdirs.user_log_dir(appname=appdirs_appname))
         if not bluesky_ipython_log_dir.exists():
             bluesky_ipython_log_dir.mkdir(parents=True, exist_ok=True)
-        bluesky_ipython_log_file_path = bluesky_ipython_log_dir / Path(
-            "bluesky_ipython.log"
-        )
+        bluesky_ipython_log_file_path = bluesky_ipython_log_dir / Path("bluesky_ipython.log")
         print(
             "environment variable BLUESKY_IPYTHON_LOG_FILE is not set,"
             f" using default file path '{bluesky_ipython_log_file_path}'",
@@ -481,17 +472,13 @@ def configure_ipython_logging(
         bluesky_ipython_log_file_path.exists()
         and os.path.getsize(bluesky_ipython_log_file_path) >= rotate_file_size
     ):
-        bluesky_ipython_log_file_path.rename(
-            str(bluesky_ipython_log_file_path) + ".old"
-        )
+        bluesky_ipython_log_file_path.rename(str(bluesky_ipython_log_file_path) + ".old")
     # ipython gives a warning if logging fails to start, for example if the log
     # directory does not exist. Convert that warning to an exception here.
     with warnings.catch_warnings():
         warnings.simplefilter(action="error")
         # specify the file for ipython logging output
-        ipython.run_line_magic(
-            "logstart", f"-o -t {bluesky_ipython_log_file_path} append"
-        )
+        ipython.run_line_magic("logstart", f"-o -t {bluesky_ipython_log_file_path} append")
 
     return bluesky_ipython_log_file_path
 
@@ -524,21 +511,15 @@ def configure_kafka_publisher(RE, beamline_name, override_config_path=None):
     else:
         bluesky_kafka_config_path = "/etc/bluesky/kafka.yml"
 
-    bluesky_kafka_configuration = _read_bluesky_kafka_config_file(
-        bluesky_kafka_config_path
-    )
+    bluesky_kafka_configuration = _read_bluesky_kafka_config_file(bluesky_kafka_config_path)
     # convert the list of bootstrap servers into a comma-delimited string
     #   which is the format required by the confluent python api
     bootstrap_servers = ",".join(bluesky_kafka_configuration["bootstrap_servers"])
 
     runengine_producer_config = {}
     if "producer_consumer_security_config" in bluesky_kafka_configuration:
-        runengine_producer_config.update(
-            bluesky_kafka_configuration["producer_consumer_security_config"]
-        )
-    runengine_producer_config.update(
-        bluesky_kafka_configuration["runengine_producer_config"]
-    )
+        runengine_producer_config.update(bluesky_kafka_configuration["producer_consumer_security_config"])
+    runengine_producer_config.update(bluesky_kafka_configuration["runengine_producer_config"])
 
     if bluesky_kafka_configuration["abort_run_on_kafka_exception"]:
         kafka_publisher_details = _subscribe_kafka_publisher(
@@ -633,15 +614,10 @@ def configure_olog(user_ns, *, callback=None, subscribe=True):
                 try:
                     cb(name, doc)
                 except Exception as exc:
-                    warn(
-                        "This olog is giving errors. This will not be logged."
-                        "Error:" + str(exc)
-                    )
+                    warn("This olog is giving errors. This will not be logged.Error:" + str(exc))
 
         olog_queue = queue.Queue(maxsize=100)
-        olog_thread = threading.Thread(
-            target=submit_to_olog, args=(olog_queue, callback), daemon=True
-        )
+        olog_thread = threading.Thread(target=submit_to_olog, args=(olog_queue, callback), daemon=True)
 
         olog_thread.start()
 

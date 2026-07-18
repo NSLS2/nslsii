@@ -33,9 +33,7 @@ class VideoStreamDet(Device):
         frame_shape=(1080, 1920),
         **kwargs,
     ):
-        warnings.warn(
-            f"This class {self.__class__.__name__} will be removed in the future."
-        )
+        warnings.warn(f"This class {self.__class__.__name__} will be removed in the future.")
 
         super().__init__(*args, **kwargs)
 
@@ -64,8 +62,7 @@ class VideoStreamDet(Device):
         )
 
         self._data_file = str(
-            Path(self._resource_document["root"])
-            / Path(self._resource_document["resource_path"])
+            Path(self._resource_document["root"]) / Path(self._resource_document["resource_path"])
         )
 
         # now discard the start uid, a real one will be added later

@@ -5,8 +5,7 @@ from caproto import ChannelType
 import contextvars
 import functools
 
-internal_process = contextvars.ContextVar('internal_process',
-                                          default=False)
+internal_process = contextvars.ContextVar("internal_process", default=False)
 
 
 def no_reentry(func):
@@ -16,7 +15,7 @@ def no_reentry(func):
             return
         try:
             internal_process.set(True)
-            return (await func(*args, **kwargs))
+            return await func(*args, **kwargs)
         finally:
             internal_process.set(False)
 
@@ -56,9 +55,7 @@ class EPSTwoStateIOC(PVGroup):
         default is False
     """
 
-    def __init__(self, retries=2, enbl_sts_val='True',
-                 hw_error_val='False', sts_error_val='False',
-                 **kwargs):
+    def __init__(self, retries=2, enbl_sts_val="True", hw_error_val="False", sts_error_val="False", **kwargs):
 
         super().__init__(**kwargs)
 
@@ -72,66 +69,59 @@ class EPSTwoStateIOC(PVGroup):
 
     # Pos-Sts two-state PV
 
-    _pos_states = ['Open', 'Not Open']  # two position states
+    _pos_states = ["Open", "Not Open"]  # two position states
 
-    pos_sts = pvproperty(value="Open",
-                         enum_strings=_pos_states,
-                         dtype=ChannelType.ENUM,
-                         read_only=True,
-                         name='Pos-Sts')
+    pos_sts = pvproperty(
+        value="Open", enum_strings=_pos_states, dtype=ChannelType.ENUM, read_only=True, name="Pos-Sts"
+    )
 
     # Opn-Cmd and Cls-Cmd PVs used by client for changing state
 
-    _cmd_states = ['None', 'Done']  # two command states
+    _cmd_states = ["None", "Done"]  # two command states
 
-    state1_cmd = pvproperty(value=_cmd_states[0],
-                            enum_strings=['None', 'Open'],
-                            dtype=ChannelType.ENUM,
-                            name='Cmd:Opn-Cmd')
-    state2_cmd = pvproperty(value=_cmd_states[0],
-                            enum_strings=['None', 'Close'],
-                            dtype=ChannelType.ENUM,
-                            name='Cmd:Cls-Cmd')
+    state1_cmd = pvproperty(
+        value=_cmd_states[0], enum_strings=["None", "Open"], dtype=ChannelType.ENUM, name="Cmd:Opn-Cmd"
+    )
+    state2_cmd = pvproperty(
+        value=_cmd_states[0], enum_strings=["None", "Close"], dtype=ChannelType.ENUM, name="Cmd:Cls-Cmd"
+    )
 
-    _fail_states = ['False', 'True']
+    _fail_states = ["False", "True"]
 
-    fail_to_state1 = pvproperty(value=_fail_states[0],
-                                enum_strings=_fail_states,
-                                dtype=ChannelType.ENUM,
-                                read_only=True,
-                                name='Sts:FailOpn-Sts')
-    fail_to_state2 = pvproperty(value=_fail_states[0],
-                                enum_strings=_fail_states,
-                                dtype=ChannelType.ENUM,
-                                read_only=True,
-                                name='Sts:FailCls-Sts')
+    fail_to_state1 = pvproperty(
+        value=_fail_states[0],
+        enum_strings=_fail_states,
+        dtype=ChannelType.ENUM,
+        read_only=True,
+        name="Sts:FailOpn-Sts",
+    )
+    fail_to_state2 = pvproperty(
+        value=_fail_states[0],
+        enum_strings=_fail_states,
+        dtype=ChannelType.ENUM,
+        read_only=True,
+        name="Sts:FailCls-Sts",
+    )
 
     # Enbl-Sts PV that enables/disables the state change
 
-    _enbl_states = ['False', 'True']
+    _enbl_states = ["False", "True"]
 
-    enbl_sts = pvproperty(value='',
-                          enum_strings=_enbl_states,
-                          dtype=ChannelType.ENUM,
-                          name='Enbl-Sts')
+    enbl_sts = pvproperty(value="", enum_strings=_enbl_states, dtype=ChannelType.ENUM, name="Enbl-Sts")
 
     # Hardware error status
 
-    _hw_error_states = ['False', 'True']
+    _hw_error_states = ["False", "True"]
 
-    hw_error_sts = pvproperty(value='',
-                              enum_strings=_hw_error_states,
-                              dtype=ChannelType.ENUM,
-                              name='HwError-Sts')
+    hw_error_sts = pvproperty(value="", enum_strings=_hw_error_states, dtype=ChannelType.ENUM, name="HwError-Sts")
 
     # Pos-Sts error status
 
-    _sts_error_states = ['False', 'True']
+    _sts_error_states = ["False", "True"]
 
-    sts_error_sts = pvproperty(value='',
-                               enum_strings=_sts_error_states,
-                               dtype=ChannelType.ENUM,
-                               name='StsError-Sts')
+    sts_error_sts = pvproperty(
+        value="", enum_strings=_sts_error_states, dtype=ChannelType.ENUM, name="StsError-Sts"
+    )
 
     # PV Startup/Putter Methods
 
@@ -154,11 +144,11 @@ class EPSTwoStateIOC(PVGroup):
     @state1_cmd.putter
     @no_reentry
     async def state1_cmd(self, instance, value):
-        if value == 'Open':
+        if value == "Open":
             await self.state1_cmd.write(value)
             await instance.async_lib.library.sleep(1)
-            await self.pos_sts.write('Open')
-        return 'None'
+            await self.pos_sts.write("Open")
+        return "None"
 
     @state2_cmd.startup
     async def state2_cmd(self, instance, async_lib):
@@ -167,11 +157,11 @@ class EPSTwoStateIOC(PVGroup):
     @state2_cmd.putter
     @no_reentry
     async def state2_cmd(self, instance, value):
-        if value == 'Close':
+        if value == "Close":
             await self.state2_cmd.write(value)
             await instance.async_lib.library.sleep(1)
-            await self.pos_sts.write('Not Open')
-        return 'None'
+            await self.pos_sts.write("Not Open")
+        return "None"
 
     @enbl_sts.putter
     async def enbl_sts(self, instance, value):
@@ -191,57 +181,52 @@ class EPSTwoStateIOC(PVGroup):
     # Internal Methods
 
     async def _state_cmd_put(self, instance, value, state_val, fail_to_state):
-        if(value == self._cmd_states[0]):  # if None -> do nothing
+        if value == self._cmd_states[0]:  # if None -> do nothing
             return self._cmd_states[0]
-        if(self._pos_sts_val == state_val):  # if in state -> do nothing
+        if self._pos_sts_val == state_val:  # if in state -> do nothing
             return self._cmd_states[0]
-        if(self._enbl_sts_val == 'False'):  # if changes not enabled -> fail
-            await fail_to_state.write(value='True')
+        if self._enbl_sts_val == "False":  # if changes not enabled -> fail
+            await fail_to_state.write(value="True")
             return self._cmd_states[0]
         self._num_retries += 1
-        if(self._num_retries < self._max_retries):
+        if self._num_retries < self._max_retries:
             return self._cmd_states[0]
         else:
             self._num_retries = 0
-        if(self._hw_error_val == 'True'):  # if hw error -> fail
-            await fail_to_state.write(value='True')
+        if self._hw_error_val == "True":  # if hw error -> fail
+            await fail_to_state.write(value="True")
             return self._cmd_states[1]
         else:
-            await fail_to_state.write(value='False')
-        if(self._sts_error_val == 'True'):  # if sts error -> don't change sts
+            await fail_to_state.write(value="False")
+        if self._sts_error_val == "True":  # if sts error -> don't change sts
             return self._cmd_states[1]
         await self.pos_sts.write(value=state_val)
         self._pos_sts_val = state_val
         return self._cmd_states[0]
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
+    parser, split_args = template_arg_parser(default_prefix="eps2state:", desc="EPS Two State IOC.")
 
-    parser, split_args = template_arg_parser(
-        default_prefix='eps2state:',
-        desc='EPS Two State IOC.')
+    retries_help = "Number of attempts required for changing state"
+    enable_help = "State change is enabled"
+    hwerror_help = "HW error is activated"
+    stserror_help = "Pos-Sts error is activated"
 
-    retries_help = 'Number of attempts required for changing state'
-    enable_help = 'State change is enabled'
-    hwerror_help = 'HW error is activated'
-    stserror_help = 'Pos-Sts error is activated'
-
-    parser.add_argument('--retries', help=retries_help,
-                        required=False, default=2, type=int)
-    parser.add_argument('--enable', help=enable_help,
-                        required=False, default='True', type=str)
-    parser.add_argument('--hwerror', help=hwerror_help,
-                        required=False, default='False', type=str)
-    parser.add_argument('--stserror', help=stserror_help,
-                        required=False, default='False', type=str)
+    parser.add_argument("--retries", help=retries_help, required=False, default=2, type=int)
+    parser.add_argument("--enable", help=enable_help, required=False, default="True", type=str)
+    parser.add_argument("--hwerror", help=hwerror_help, required=False, default="False", type=str)
+    parser.add_argument("--stserror", help=stserror_help, required=False, default="False", type=str)
 
     args = parser.parse_args()
     ioc_options, run_options = split_args(args)
 
-    ioc = EPSTwoStateIOC(retries=args.retries,
-                         enbl_sts_val=args.enable,
-                         hw_error_val=args.hwerror,
-                         sts_error_val=args.stserror,
-                         **ioc_options)
+    ioc = EPSTwoStateIOC(
+        retries=args.retries,
+        enbl_sts_val=args.enable,
+        hw_error_val=args.hwerror,
+        sts_error_val=args.stserror,
+        **ioc_options,
+    )
 
     run(ioc.pvdb, **run_options)

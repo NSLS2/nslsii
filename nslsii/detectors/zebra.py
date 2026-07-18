@@ -1,9 +1,8 @@
 from enum import IntEnum
 import logging
 
-from ophyd import (Device, Component as Cpt, FormattedComponent as FC,
-                   Signal)
-from ophyd import (EpicsSignal, EpicsSignalRO, DeviceStatus)
+from ophyd import Device, Component as Cpt, FormattedComponent as FC, Signal
+from ophyd import EpicsSignal, EpicsSignalRO, DeviceStatus
 from ophyd.utils import set_and_wait
 
 from .trigger_mixins import ModalBase
@@ -13,8 +12,7 @@ logger = logging.getLogger(__name__)
 
 def _get_configuration_attrs(inst, *, signal_class=Signal):
     cls = inst.__class__
-    return [sig_name for sig_name in cls.component_names
-            if issubclass(getattr(cls, sig_name).cls, signal_class)]
+    return [sig_name for sig_name in cls.component_names if issubclass(getattr(cls, sig_name).cls, signal_class)]
 
 
 class ZebraInputEdge(IntEnum):
@@ -94,30 +92,29 @@ class EpicsSignalWithRBV(EpicsSignal):
     # setpoint and 'pvname:RBV' being the read-back
 
     def __init__(self, prefix, **kwargs):
-        super().__init__(prefix + ':RBV', write_pv=prefix, **kwargs)
+        super().__init__(prefix + ":RBV", write_pv=prefix, **kwargs)
 
 
 class ZebraPulse(Device):
-    width = Cpt(EpicsSignalWithRBV, 'WID')
-    input_addr = Cpt(EpicsSignalWithRBV, 'INP')
-    input_str = Cpt(EpicsSignalRO, 'INP:STR', string=True)
-    input_status = Cpt(EpicsSignalRO, 'INP:STA')
-    delay = Cpt(EpicsSignalWithRBV, 'DLY')
-    delay_sync = Cpt(EpicsSignal, 'DLY:SYNC')
-    time_units = Cpt(EpicsSignalWithRBV, 'PRE', string=True)
-    output = Cpt(EpicsSignal, 'OUT')
+    width = Cpt(EpicsSignalWithRBV, "WID")
+    input_addr = Cpt(EpicsSignalWithRBV, "INP")
+    input_str = Cpt(EpicsSignalRO, "INP:STR", string=True)
+    input_status = Cpt(EpicsSignalRO, "INP:STA")
+    delay = Cpt(EpicsSignalWithRBV, "DLY")
+    delay_sync = Cpt(EpicsSignal, "DLY:SYNC")
+    time_units = Cpt(EpicsSignalWithRBV, "PRE", string=True)
+    output = Cpt(EpicsSignal, "OUT")
 
-    input_edge = FC(EpicsSignal,
-                    '{self._zebra_prefix}POLARITY:{self._edge_addr}')
+    input_edge = FC(EpicsSignal, "{self._zebra_prefix}POLARITY:{self._edge_addr}")
 
-    _edge_addrs = {1: 'BC',
-                   2: 'BD',
-                   3: 'BE',
-                   4: 'BF',
-                   }
+    _edge_addrs = {
+        1: "BC",
+        2: "BD",
+        3: "BE",
+        4: "BF",
+    }
 
-    def __init__(self, prefix, *, index=None, parent=None,
-                 configuration_attrs=None, read_attrs=None, **kwargs):
+    def __init__(self, prefix, *, index=None, parent=None, configuration_attrs=None, read_attrs=None, **kwargs):
         if read_attrs is None:
             read_attrs = []
         if configuration_attrs is None:
@@ -128,30 +125,31 @@ class ZebraPulse(Device):
         self._zebra_prefix = zebra.prefix
         self._edge_addr = self._edge_addrs[index]
 
-        super().__init__(prefix, configuration_attrs=configuration_attrs,
-                         read_attrs=read_attrs, parent=parent, **kwargs)
+        super().__init__(
+            prefix, configuration_attrs=configuration_attrs, read_attrs=read_attrs, parent=parent, **kwargs
+        )
 
 
 class ZebraOutputBase(Device):
-    '''The base of all zebra outputs (1~8)
+    """The base of all zebra outputs (1~8)
 
-        Front outputs
-        # TTL  LVDS  NIM  PECL  OC  ENC
-        1  o    o     o
-        2  o    o     o
-        3  o    o               o
-        4  o          o    o
+    Front outputs
+    # TTL  LVDS  NIM  PECL  OC  ENC
+    1  o    o     o
+    2  o    o     o
+    3  o    o               o
+    4  o          o    o
 
-        Rear outputs
-        # TTL  LVDS  NIM  PECL  OC  ENC
-        5                            o
-        6                            o
-        7                            o
-        8                            o
+    Rear outputs
+    # TTL  LVDS  NIM  PECL  OC  ENC
+    5                            o
+    6                            o
+    7                            o
+    8                            o
 
-    '''
-    def __init__(self, prefix, *, index=None, read_attrs=None,
-                 configuration_attrs=None, **kwargs):
+    """
+
+    def __init__(self, prefix, *, index=None, read_attrs=None, configuration_attrs=None, **kwargs):
         self.index = index
 
         if read_attrs is None:
@@ -159,67 +157,63 @@ class ZebraOutputBase(Device):
         if configuration_attrs is None:
             configuration_attrs = _get_configuration_attrs(self)
 
-        super().__init__(prefix, read_attrs=read_attrs,
-                         configuration_attrs=configuration_attrs, **kwargs)
+        super().__init__(prefix, read_attrs=read_attrs, configuration_attrs=configuration_attrs, **kwargs)
 
 
 class ZebraOutputType(Device):
-    '''Shared by all output types (ttl, lvds, nim, pecl, out)'''
-    addr = Cpt(EpicsSignalWithRBV, '')
-    status = Cpt(EpicsSignalRO, ':STA')
-    string = Cpt(EpicsSignalRO, ':STR', string=True)
-    sync = Cpt(EpicsSignal, ':SYNC')
-    write_output = Cpt(EpicsSignal, ':SET')
+    """Shared by all output types (ttl, lvds, nim, pecl, out)"""
 
-    def __init__(self, prefix, *, read_attrs=None, configuration_attrs=None,
-                 **kwargs):
+    addr = Cpt(EpicsSignalWithRBV, "")
+    status = Cpt(EpicsSignalRO, ":STA")
+    string = Cpt(EpicsSignalRO, ":STR", string=True)
+    sync = Cpt(EpicsSignal, ":SYNC")
+    write_output = Cpt(EpicsSignal, ":SET")
+
+    def __init__(self, prefix, *, read_attrs=None, configuration_attrs=None, **kwargs):
         if read_attrs is None:
             read_attrs = []
         if configuration_attrs is None:
             configuration_attrs = _get_configuration_attrs(self)
 
-        super().__init__(prefix, read_attrs=read_attrs,
-                         configuration_attrs=configuration_attrs, **kwargs)
+        super().__init__(prefix, read_attrs=read_attrs, configuration_attrs=configuration_attrs, **kwargs)
 
 
 class ZebraFrontOutput12(ZebraOutputBase):
-    ttl = Cpt(ZebraOutputType, 'TTL')
-    lvds = Cpt(ZebraOutputType, 'LVDS')
-    nim = Cpt(ZebraOutputType, 'NIM')
+    ttl = Cpt(ZebraOutputType, "TTL")
+    lvds = Cpt(ZebraOutputType, "LVDS")
+    nim = Cpt(ZebraOutputType, "NIM")
 
 
 class ZebraFrontOutput3(ZebraOutputBase):
-    ttl = Cpt(ZebraOutputType, 'TTL')
-    lvds = Cpt(ZebraOutputType, 'LVDS')
-    open_collector = Cpt(ZebraOutputType, 'OC')
+    ttl = Cpt(ZebraOutputType, "TTL")
+    lvds = Cpt(ZebraOutputType, "LVDS")
+    open_collector = Cpt(ZebraOutputType, "OC")
 
 
 class ZebraFrontOutput4(ZebraOutputBase):
-    ttl = Cpt(ZebraOutputType, 'TTL')
-    nim = Cpt(ZebraOutputType, 'NIM')
-    pecl = Cpt(ZebraOutputType, 'PECL')
+    ttl = Cpt(ZebraOutputType, "TTL")
+    nim = Cpt(ZebraOutputType, "NIM")
+    pecl = Cpt(ZebraOutputType, "PECL")
 
 
 class ZebraRearOutput(ZebraOutputBase):
-    enca = Cpt(ZebraOutputType, 'ENCA')
-    encb = Cpt(ZebraOutputType, 'ENCB')
-    encz = Cpt(ZebraOutputType, 'ENCZ')
-    conn = Cpt(ZebraOutputType, 'CONN')
+    enca = Cpt(ZebraOutputType, "ENCA")
+    encb = Cpt(ZebraOutputType, "ENCB")
+    encz = Cpt(ZebraOutputType, "ENCZ")
+    conn = Cpt(ZebraOutputType, "CONN")
 
 
 class ZebraGateInput(Device):
-    addr = Cpt(EpicsSignalWithRBV, '')
-    string = Cpt(EpicsSignalRO, ':STR', string=True)
-    status = Cpt(EpicsSignalRO, ':STA')
-    sync = Cpt(EpicsSignal, ':SYNC')
-    write_input = Cpt(EpicsSignal, ':SET')
+    addr = Cpt(EpicsSignalWithRBV, "")
+    string = Cpt(EpicsSignalRO, ":STR", string=True)
+    status = Cpt(EpicsSignalRO, ":STA")
+    sync = Cpt(EpicsSignal, ":SYNC")
+    write_input = Cpt(EpicsSignal, ":SET")
 
     # Input edge index depends on the gate number (these are set in __init__)
-    edge = FC(EpicsSignal,
-              '{self._zebra_prefix}POLARITY:B{self._input_edge_idx}')
+    edge = FC(EpicsSignal, "{self._zebra_prefix}POLARITY:B{self._input_edge_idx}")
 
-    def __init__(self, prefix, *, index=None, parent=None,
-                 configuration_attrs=None, read_attrs=None, **kwargs):
+    def __init__(self, prefix, *, index=None, parent=None, configuration_attrs=None, read_attrs=None, **kwargs):
         if read_attrs is None:
             read_attrs = []
         if configuration_attrs is None:
@@ -232,30 +226,26 @@ class ZebraGateInput(Device):
         self._zebra_prefix = zebra.prefix
         self._input_edge_idx = gate._input_edge_idx[self.index]
 
-        super().__init__(prefix, read_attrs=read_attrs,
-                         configuration_attrs=configuration_attrs,
-                         parent=parent, **kwargs)
+        super().__init__(
+            prefix, read_attrs=read_attrs, configuration_attrs=configuration_attrs, parent=parent, **kwargs
+        )
 
 
 class ZebraGate(Device):
-    input1 = Cpt(ZebraGateInput, 'INP1', index=1)
-    input2 = Cpt(ZebraGateInput, 'INP2', index=2)
-    output = Cpt(EpicsSignal, 'OUT')
+    input1 = Cpt(ZebraGateInput, "INP1", index=1)
+    input2 = Cpt(ZebraGateInput, "INP2", index=2)
+    output = Cpt(EpicsSignal, "OUT")
 
-    def __init__(self, prefix, *, index=None, read_attrs=None,
-                 configuration_attrs=None, **kwargs):
+    def __init__(self, prefix, *, index=None, read_attrs=None, configuration_attrs=None, **kwargs):
         self.index = index
-        self._input_edge_idx = {1: index - 1,
-                                2: 4 + index - 1
-                                }
+        self._input_edge_idx = {1: index - 1, 2: 4 + index - 1}
 
         if read_attrs is None:
             read_attrs = []
         if configuration_attrs is None:
-            configuration_attrs = ['output']
+            configuration_attrs = ["output"]
 
-        super().__init__(prefix, configuration_attrs=configuration_attrs,
-                         read_attrs=read_attrs, **kwargs)
+        super().__init__(prefix, configuration_attrs=configuration_attrs, read_attrs=read_attrs, **kwargs)
 
     def set_input_edges(self, edge1, edge2):
         set_and_wait(self.input1.edge, int(edge1))
@@ -263,42 +253,40 @@ class ZebraGate(Device):
 
 
 class Zebra(ModalBase, Device):
-    soft_input1 = Cpt(EpicsSignal, 'SOFT_IN:B0')
-    soft_input2 = Cpt(EpicsSignal, 'SOFT_IN:B1')
-    soft_input3 = Cpt(EpicsSignal, 'SOFT_IN:B2')
-    soft_input4 = Cpt(EpicsSignal, 'SOFT_IN:B3')
+    soft_input1 = Cpt(EpicsSignal, "SOFT_IN:B0")
+    soft_input2 = Cpt(EpicsSignal, "SOFT_IN:B1")
+    soft_input3 = Cpt(EpicsSignal, "SOFT_IN:B2")
+    soft_input4 = Cpt(EpicsSignal, "SOFT_IN:B3")
 
-    pulse1 = Cpt(ZebraPulse, 'PULSE1_', index=1)
-    pulse2 = Cpt(ZebraPulse, 'PULSE2_', index=2)
-    pulse3 = Cpt(ZebraPulse, 'PULSE3_', index=3)
-    pulse4 = Cpt(ZebraPulse, 'PULSE4_', index=4)
+    pulse1 = Cpt(ZebraPulse, "PULSE1_", index=1)
+    pulse2 = Cpt(ZebraPulse, "PULSE2_", index=2)
+    pulse3 = Cpt(ZebraPulse, "PULSE3_", index=3)
+    pulse4 = Cpt(ZebraPulse, "PULSE4_", index=4)
 
-    output1 = Cpt(ZebraFrontOutput12, 'OUT1_', index=1)
-    output2 = Cpt(ZebraFrontOutput12, 'OUT2_', index=2)
-    output3 = Cpt(ZebraFrontOutput3, 'OUT3_', index=3)
-    output4 = Cpt(ZebraFrontOutput4, 'OUT4_', index=4)
+    output1 = Cpt(ZebraFrontOutput12, "OUT1_", index=1)
+    output2 = Cpt(ZebraFrontOutput12, "OUT2_", index=2)
+    output3 = Cpt(ZebraFrontOutput3, "OUT3_", index=3)
+    output4 = Cpt(ZebraFrontOutput4, "OUT4_", index=4)
 
-    output5 = Cpt(ZebraRearOutput, 'OUT5_', index=5)
-    output6 = Cpt(ZebraRearOutput, 'OUT6_', index=6)
-    output7 = Cpt(ZebraRearOutput, 'OUT7_', index=7)
-    output8 = Cpt(ZebraRearOutput, 'OUT8_', index=8)
+    output5 = Cpt(ZebraRearOutput, "OUT5_", index=5)
+    output6 = Cpt(ZebraRearOutput, "OUT6_", index=6)
+    output7 = Cpt(ZebraRearOutput, "OUT7_", index=7)
+    output8 = Cpt(ZebraRearOutput, "OUT8_", index=8)
 
-    gate1 = Cpt(ZebraGate, 'GATE1_', index=1)
-    gate2 = Cpt(ZebraGate, 'GATE2_', index=2)
-    gate3 = Cpt(ZebraGate, 'GATE3_', index=3)
-    gate4 = Cpt(ZebraGate, 'GATE4_', index=4)
+    gate1 = Cpt(ZebraGate, "GATE1_", index=1)
+    gate2 = Cpt(ZebraGate, "GATE2_", index=2)
+    gate3 = Cpt(ZebraGate, "GATE3_", index=3)
+    gate4 = Cpt(ZebraGate, "GATE4_", index=4)
 
     addresses = ZebraAddresses
 
-    def __init__(self, prefix, *, configuration_attrs=None, read_attrs=None,
-                 **kwargs):
+    def __init__(self, prefix, *, configuration_attrs=None, read_attrs=None, **kwargs):
         if read_attrs is None:
             read_attrs = []
         if configuration_attrs is None:
             configuration_attrs = _get_configuration_attrs(self)
 
-        super().__init__(prefix, configuration_attrs=configuration_attrs,
-                         read_attrs=read_attrs, **kwargs)
+        super().__init__(prefix, configuration_attrs=configuration_attrs, read_attrs=read_attrs, **kwargs)
 
         self.pulse = dict(self._get_indexed_devices(ZebraPulse))
         self.output = dict(self._get_indexed_devices(ZebraOutputBase))

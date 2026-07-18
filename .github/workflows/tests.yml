@@ -18,14 +18,16 @@ jobs:
       fail-fast: false
     steps:
 
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
     - name: Start Redis
       uses: supercharge/redis-github-action@1.4.0
 
 
     - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v2
+      uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
 
@@ -34,9 +36,15 @@ jobs:
       run: |
         set -vxeuo pipefail
         pip install --upgrade pip wheel
-        pip install .
-        pip install -r requirements-dev.txt
+        pip install -e ".[dev]"
         pip list
+
+    - name: Lint with pre-commit
+      if: matrix.python-version == '3.12'
+      shell: bash -l {0}
+      run: |
+        set -vxeuo pipefail
+        pre-commit run --all-files
 
     - name: Test with pytest
       shell: bash -l {0}

@@ -95,11 +95,11 @@ TEST_DOCS = [
 
 
 @pytest.mark.parametrize(
-        "printing_enabled, expected_output",
-        [
-            (True, [(f"name = '{name}'", json.dumps(doc, indent=4)) for name, doc in TEST_DOCS]),
-            (False, [("", "")] * len(TEST_DOCS)),
-        ],
+    "printing_enabled, expected_output",
+    [
+        (True, [(f"name = '{name}'", json.dumps(doc, indent=4)) for name, doc in TEST_DOCS]),
+        (False, [("", "")] * len(TEST_DOCS)),
+    ],
 )
 def test_bs_doc_stream_printer(capsys, printing_enabled: bool, expected_output: list[tuple[str, str]]):
     """Test that the dump_docs_to_stdout function works as expected."""
@@ -122,14 +122,29 @@ def test_bs_doc_stream_printer(capsys, printing_enabled: bool, expected_output: 
 @pytest.mark.parametrize(
     "writing_enabled, flush_each_doc_enabled, expected_file_exists, expected_file_contents",
     [
-        (True, True, [True] * len(TEST_DOCS), [[{name: doc} for name, doc in TEST_DOCS[:i]] for i in range(1, len(TEST_DOCS) + 1)]),
-        (True, False, [False] * (len(TEST_DOCS) - 1) + [True], [None] * (len(TEST_DOCS) - 1) + [[{name: doc} for name, doc in TEST_DOCS]]),
+        (
+            True,
+            True,
+            [True] * len(TEST_DOCS),
+            [[{name: doc} for name, doc in TEST_DOCS[:i]] for i in range(1, len(TEST_DOCS) + 1)],
+        ),
+        (
+            True,
+            False,
+            [False] * (len(TEST_DOCS) - 1) + [True],
+            [None] * (len(TEST_DOCS) - 1) + [[{name: doc} for name, doc in TEST_DOCS]],
+        ),
         (False, True, [False] * len(TEST_DOCS), [None] * len(TEST_DOCS)),
         (False, False, [False] * len(TEST_DOCS), [None] * len(TEST_DOCS)),
     ],
 )
-def test_json_bluesky_doc_writer(tmp_path, writing_enabled: bool, flush_each_doc_enabled: bool,
-                                 expected_file_exists: list[bool], expected_file_contents: list[dict | None]):
+def test_json_bluesky_doc_writer(
+    tmp_path,
+    writing_enabled: bool,
+    flush_each_doc_enabled: bool,
+    expected_file_exists: list[bool],
+    expected_file_contents: list[dict | None],
+):
     """Test that the JSONBlueskyDocWriter works as expected."""
 
     writer = BlueskyDocJSONWriter(write_directory=tmp_path, flush_on_each_doc=flush_each_doc_enabled)

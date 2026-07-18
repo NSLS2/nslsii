@@ -33,7 +33,7 @@ class PMACKillSwitch(Device):
         """
         if value != 1:
             logging.getLogger(__name__).warning(
-                "The value of the PMACKiller should only ever be set to 1. " "Changing the setpoint to 1 now."
+                "The value of the PMACKiller should only ever be set to 1. Changing the setpoint to 1 now."
             )
             value = 1
         self.kill.set(value, *args, **kwargs)

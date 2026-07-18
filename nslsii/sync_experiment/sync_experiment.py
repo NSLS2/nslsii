@@ -8,23 +8,20 @@ from getpass import getpass
 from typing import Any, Dict, Union, Optional
 
 import httpx
-import redis
 import yaml
 from ldap3 import NTLM, Connection, Server
 from ldap3.core.exceptions import LDAPInvalidCredentialsResult, LDAPSocketOpenError
 from redis_json_dict import RedisJSONDict
 
+from nslsii.utils import open_redis_client
+
 data_session_re = re.compile(r"^pass-(?P<proposal_number>\d+)$")
 
 nslsii_api_client = httpx.Client(base_url="https://api.nsls2.bnl.gov")
 
-from nslsii.utils import open_redis_client
-
 
 def get_current_cycle() -> str:
-    cycle_response = nslsii_api_client.get(
-        "/v1/facility/nsls2/cycles/current"
-    ).raise_for_status()
+    cycle_response = nslsii_api_client.get("/v1/facility/nsls2/cycles/current").raise_for_status()
     return cycle_response.json()["cycle"]
 
 
@@ -33,9 +30,7 @@ def is_commissioning_proposal(proposal_number, beamline) -> bool:
     commissioning_proposals_response = nslsii_api_client.get(
         f"/v1/proposals/commissioning?beamline={beamline}"
     ).raise_for_status()
-    commissioning_proposals = commissioning_proposals_response.json()[
-        "commissioning_proposals"
-    ]
+    commissioning_proposals = commissioning_proposals_response.json()["commissioning_proposals"]
     return proposal_number in commissioning_proposals
 
 
@@ -53,9 +48,7 @@ def validate_proposal(data_session_value, beamline) -> Dict[str, Any]:
         current_cycle = get_current_cycle()
         proposal_number = data_session_match.group("proposal_number")
         proposal_commissioning = is_commissioning_proposal(proposal_number, beamline)
-        proposal_response = nslsii_api_client.get(
-            f"/v1/proposal/{proposal_number}"
-        ).raise_for_status()
+        proposal_response = nslsii_api_client.get(f"/v1/proposal/{proposal_number}").raise_for_status()
         proposal_data = proposal_response.json()["proposal"]
         if "error_message" in proposal_data:
             raise ValueError(
@@ -64,10 +57,7 @@ def validate_proposal(data_session_value, beamline) -> Dict[str, Any]:
                 f"{proposal_data}"
             )
         else:
-            if (
-                not proposal_commissioning
-                and current_cycle not in proposal_data["cycles"]
-            ):
+            if not proposal_commissioning and current_cycle not in proposal_data["cycles"]:
                 raise ValueError(
                     f"Proposal {data_session_value} is not valid in the current NSLS2 cycle ({current_cycle})."
                 )
@@ -218,18 +208,12 @@ def switch_redis_proposal(
     username = username or md.get("username")
 
     new_data_session = f"pass-{proposal_number}"
-    if (new_data_session == md.get("data_session")) and (
-        username == md.get("username")
-    ):
+    if (new_data_session == md.get("data_session")) and (username == md.get("username")):
         # The cycle needs to get updated regardless of experiment status
         md["cycle"] = (
-            "commissioning"
-            if is_commissioning_proposal(str(proposal_number), beamline)
-            else get_current_cycle()
+            "commissioning" if is_commissioning_proposal(str(proposal_number), beamline) else get_current_cycle()
         )
-        warnings.warn(
-            f"Experiment {new_data_session} was already started by the same user."
-        )
+        warnings.warn(f"Experiment {new_data_session} was already started by the same user.")
 
     else:
         if not should_they_be_here(username, new_data_session, beamline):
@@ -242,18 +226,14 @@ def switch_redis_proposal(
         pi_name = ""
         for user in users:
             if user.get("is_pi"):
-                pi_name = (
-                    f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
-                )
+                pi_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
         md["data_session"] = new_data_session  # e.g. "pass-123456"
         md["username"] = username
         md["start_datetime"] = datetime.now().isoformat()
         # tiled-access-tags used by bluesky-tiled-writer, not saved to metadata
         md["tiled_access_tags"] = [new_data_session]
         md["cycle"] = (
-            "commissioning"
-            if is_commissioning_proposal(str(proposal_number), beamline)
-            else get_current_cycle()
+            "commissioning" if is_commissioning_proposal(str(proposal_number), beamline) else get_current_cycle()
         )
         md["proposal"] = {
             "proposal_id": proposal_data.get("proposal_id"),
@@ -298,9 +278,7 @@ def sync_experiment(
 def main():
     # Used by the `sync-experiment` command
 
-    parser = argparse.ArgumentParser(
-        description="Start or switch beamline experiment and record it in Redis"
-    )
+    parser = argparse.ArgumentParser(description="Start or switch beamline experiment and record it in Redis")
     parser.add_argument(
         "-b",
         "--beamline",

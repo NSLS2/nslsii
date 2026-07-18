@@ -4,6 +4,7 @@ import sys
 
 import pytest
 
+
 @pytest.mark.skip(reason="bluesky kafka is deprecated.")
 def test_conditional_import_negative_case():
     """
@@ -51,9 +52,7 @@ else:
     )
 
     if proc.returncode:
-        pytest.fail(
-            "The subprocess returned with non-zero exit status " f"{proc.returncode}."
-        )
+        pytest.fail(f"The subprocess returned with non-zero exit status {proc.returncode}.")
 
 
 test_bluesky_kafka_config = """\
@@ -68,6 +67,7 @@ test_bluesky_kafka_config = """\
     message.timeout.ms: 3000
     compression.codec: snappy
 """
+
 
 @pytest.mark.skip(reason="bluesky kafka is deprecated.")
 def test_conditional_import_positive_case(tmp_path):
@@ -87,7 +87,7 @@ def test_conditional_import_positive_case(tmp_path):
     with open(test_config_file_path, "wt") as f:
         f.write(test_bluesky_kafka_config)
 
-    the_test = f"""
+    the_test = """
 import sys
 from unittest.mock import Mock
 
@@ -128,6 +128,4 @@ else:
     )
 
     if proc.returncode:
-        pytest.fail(
-            "The subprocess returned with non-zero exit status " f"{proc.returncode}."
-        )
+        pytest.fail(f"The subprocess returned with non-zero exit status {proc.returncode}.")

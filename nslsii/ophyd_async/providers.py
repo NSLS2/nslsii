@@ -69,9 +69,7 @@ class AcqModeFilenameProvider(UUIDFilenameProvider):
             raise ValueError("Acquisition mode enum must have at least one option!")
 
         if initial_mode is not None and not isinstance(initial_mode, mode_type):
-            raise ValueError(
-                f"Initial acquisition mode {initial_mode} is not a valid option for {mode_type}!"
-            )
+            raise ValueError(f"Initial acquisition mode {initial_mode} is not a valid option for {mode_type}!")
 
         self._mode = initial_mode
         if initial_mode is None:
@@ -170,15 +168,13 @@ class NSLS2PathProvider(PathProvider):
         self._granularity = granularity
         self._ymd_separator = separator
 
-        beamline_data_dir = (beamline_tla if beamline_tla is not None else os.getenv(
-            "ENDSTATION_ACRONYM", os.getenv("BEAMLINE_ACRONYM", "")
-        ).lower()) + (beamline_tla_suffix or "")
+        beamline_data_dir = (
+            beamline_tla
+            if beamline_tla is not None
+            else os.getenv("ENDSTATION_ACRONYM", os.getenv("BEAMLINE_ACRONYM", "")).lower()
+        ) + (beamline_tla_suffix or "")
 
-        self._beamline_proposals_dir = (
-            Path("/nsls2/data/")
-            / beamline_data_dir
-            / "proposals"
-        )
+        self._beamline_proposals_dir = Path("/nsls2/data/") / beamline_data_dir / "proposals"
 
         self._include_scan_id_dir = include_scan_id_dir
 
@@ -227,13 +223,8 @@ class NSLS2PathProvider(PathProvider):
         else:
             ymd_dir_path = Path(datakey_name) / current_date
 
-        if (
-            "cycle" not in self._metadata_dict
-            or "data_session" not in self._metadata_dict
-        ):
-            raise KeyError(
-                "Metadata dictionary must contain 'cycle' and 'data_session' keys!"
-            )
+        if "cycle" not in self._metadata_dict or "data_session" not in self._metadata_dict:
+            raise KeyError("Metadata dictionary must contain 'cycle' and 'data_session' keys!")
 
         directory_path = (
             self._beamline_proposals_dir
@@ -244,9 +235,7 @@ class NSLS2PathProvider(PathProvider):
         )
 
         if self._include_scan_id_dir:
-            directory_path = (
-                directory_path / f"scan_{self._metadata_dict['scan_id']:06}"
-            )
+            directory_path = directory_path / f"scan_{self._metadata_dict['scan_id']:06}"
 
         return directory_path
 
@@ -269,6 +258,5 @@ class NSLS2PathProvider(PathProvider):
         return PathInfo(
             directory_path=directory_path,
             filename=self._filename_provider(),
-            create_dir_depth=-self._granularity
-            - (1 if self._include_scan_id_dir else 0),
+            create_dir_depth=-self._granularity - (1 if self._include_scan_id_dir else 0),
         )

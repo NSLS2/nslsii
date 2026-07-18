@@ -85,9 +85,7 @@ def test_build_channel_class():
     """
     Try to verify all Component attributes are present.
     """
-    channel_class = build_channel_class(
-        channel_number=2, mcaroi_numbers=(1, 2, 3), image_data_key="image"
-    )
+    channel_class = build_channel_class(channel_number=2, mcaroi_numbers=(1, 2, 3), image_data_key="image")
 
     assert hasattr(channel_class, "image")
 
@@ -99,16 +97,10 @@ def test_build_channel_class():
     assert hasattr(channel_class, "mca_sum")
 
     # there should be 3 MCAROI attributes: mcaroi01, mcaroi02, mcaroi3
-    expected_mcaroi_attr_names = {
-        f"mcaroi{mcaroi_i:02d}" for mcaroi_i in range(1, 3 + 1)
-    }
+    expected_mcaroi_attr_names = {f"mcaroi{mcaroi_i:02d}" for mcaroi_i in range(1, 3 + 1)}
 
     # there should be no other MCAROI attributes
-    all_mcaroi_attr_names = {
-        attr_name
-        for attr_name in dir(channel_class)
-        if re.match(r"mcaroi\d{2}", attr_name)
-    }
+    all_mcaroi_attr_names = {attr_name for attr_name in dir(channel_class) if re.match(r"mcaroi\d{2}", attr_name)}
 
     assert expected_mcaroi_attr_names == all_mcaroi_attr_names
 
@@ -136,9 +128,7 @@ def test_instantiate_channel_class():
     Leave verification of Component attributes to the previous test,
     focus on PV names here.
     """
-    channel_class = build_channel_class(
-        channel_number=2, mcaroi_numbers=(46, 47, 48), image_data_key="image"
-    )
+    channel_class = build_channel_class(channel_number=2, mcaroi_numbers=(46, 47, 48), image_data_key="image")
     channel_2 = channel_class(prefix="Xsp3:", name="channel_2")
 
     assert channel_2.image.dtype_str == "<u4"
@@ -165,16 +155,11 @@ def test_instantiate_channel_class():
     assert channel_2.mcaroi47.total_rbv.pvname == "Xsp3:MCA2ROI:47:Total_RBV"
     assert channel_2.mcaroi48.total_rbv.pvname == "Xsp3:MCA2ROI:48:Total_RBV"
 
-    assert (
-        channel_2.__repr__()
-        == "GeneratedXspress3Channel(channel_number=2, mcaroi_numbers=(46, 47, 48))"
-    )
+    assert channel_2.__repr__() == "GeneratedXspress3Channel(channel_number=2, mcaroi_numbers=(46, 47, 48))"
 
 
 def test_get_mcaroi_count():
-    detector_class = build_xspress3_class(
-        channel_numbers=(3, 5), mcaroi_numbers=(4, 6), image_data_key="image"
-    )
+    detector_class = build_xspress3_class(channel_numbers=(3, 5), mcaroi_numbers=(4, 6), image_data_key="image")
     detector = detector_class(prefix="Xsp3:", name="xs3")
 
     assert detector.get_channel(channel_number=3).get_mcaroi_count() == 2
@@ -182,9 +167,7 @@ def test_get_mcaroi_count():
 
 
 def test_mcaroi_numbers():
-    detector_class = build_xspress3_class(
-        channel_numbers=(3, 5), mcaroi_numbers=(4, 6), image_data_key="image"
-    )
+    detector_class = build_xspress3_class(channel_numbers=(3, 5), mcaroi_numbers=(4, 6), image_data_key="image")
     detector = detector_class(prefix="Xsp3:", name="xs3")
 
     assert detector.get_channel(channel_number=3).mcaroi_numbers == (4, 6)
@@ -192,9 +175,7 @@ def test_mcaroi_numbers():
 
 
 def test_get_mcaroi():
-    channel_class = build_channel_class(
-        channel_number=2, mcaroi_numbers=(1, 2), image_data_key="image"
-    )
+    channel_class = build_channel_class(channel_number=2, mcaroi_numbers=(1, 2), image_data_key="image")
     channel02 = channel_class(prefix="Xsp3:", name="channel02")
 
     mcaroi01 = channel02.get_mcaroi(mcaroi_number=1)
@@ -223,9 +204,7 @@ def test_get_mcaroi():
 
 
 def test_iterate_mcaroi_attr_names():
-    channel_class = build_channel_class(
-        channel_number=2, mcaroi_numbers=(1, 2), image_data_key="image"
-    )
+    channel_class = build_channel_class(channel_number=2, mcaroi_numbers=(1, 2), image_data_key="image")
     channel_2 = channel_class(prefix="Xsp3:", name="channel_2")
 
     mcaroi_attr_name_list = list(channel_2.iterate_mcaroi_attr_names())
@@ -233,9 +212,7 @@ def test_iterate_mcaroi_attr_names():
 
 
 def test_iterate_mcarois():
-    channel_class = build_channel_class(
-        channel_number=2, mcaroi_numbers=(1, 2), image_data_key="image"
-    )
+    channel_class = build_channel_class(channel_number=2, mcaroi_numbers=(1, 2), image_data_key="image")
     channel_2 = channel_class(prefix="Xsp3:", name="channel_2")
 
     mcaroi_list = list(channel_2.iterate_mcarois())
@@ -255,27 +232,21 @@ def test_validate_mcaroi_numbers():
         ValueError,
         match=re.escape("channel number '17' is outside the allowed interval [1,16]"),
     ):
-        build_channel_class(
-            channel_number=17, mcaroi_numbers=(), image_data_key="image"
-        )
+        build_channel_class(channel_number=17, mcaroi_numbers=(), image_data_key="image")
 
     # channel number is not an integer
     with pytest.raises(
         ValueError,
         match=re.escape("channel number '1.0' is not an integer"),
     ):
-        build_channel_class(
-            channel_number=1.0, mcaroi_numbers=(), image_data_key="image"
-        )
+        build_channel_class(channel_number=1.0, mcaroi_numbers=(), image_data_key="image")
 
 
 def test_build_xspress3_class():
     """
     Verify all channel Components are present.
     """
-    xspress3_class = build_xspress3_class(
-        channel_numbers=(1, 2, 3), mcaroi_numbers=(4, 5)
-    )
+    xspress3_class = build_xspress3_class(channel_numbers=(1, 2, 3), mcaroi_numbers=(4, 5))
     assert Xspress3Detector in xspress3_class.__mro__
 
     # there should be 3 channel attributes: channel01, channel02, channel03
@@ -284,9 +255,7 @@ def test_build_xspress3_class():
     channel_attr_name_re = re.compile(r"channel\d{2}")
     # there should be no other channel_n attributes
     all_channel_attr_names = {
-        attr_name
-        for attr_name in dir(xspress3_class)
-        if channel_attr_name_re.match(attr_name)
+        attr_name for attr_name in dir(xspress3_class) if channel_attr_name_re.match(attr_name)
     }
 
     assert expected_channel_attr_names == all_channel_attr_names
@@ -338,31 +307,15 @@ def test_instantiate_detector_class():
         # they are Kind.omitted by default
         assert channel.kind == Kind.omitted
 
-        assert (
-            channel.mcaroi.ts_control.pvname == f"Xsp3:MCA{channel_number}ROI:TSControl"
-        )
-        assert (
-            channel.mcaroi.ts_num_points.pvname
-            == f"Xsp3:MCA{channel_number}ROI:TSNumPoints"
-        )
-        assert (
-            channel.mcaroi.ts_scan_rate.pvname
-            == f"Xsp3:MCA{channel_number}ROI:TSRead.SCAN"
-        )
-        assert (
-            channel.sca.clock_ticks.pvname == f"Xsp3:C{channel_number}SCA:0:Value_RBV"
-        )
-        assert (
-            channel.mca_sum.array_data.pvname
-            == f"Xsp3:MCASUM{channel_number}:ArrayData"
-        )
+        assert channel.mcaroi.ts_control.pvname == f"Xsp3:MCA{channel_number}ROI:TSControl"
+        assert channel.mcaroi.ts_num_points.pvname == f"Xsp3:MCA{channel_number}ROI:TSNumPoints"
+        assert channel.mcaroi.ts_scan_rate.pvname == f"Xsp3:MCA{channel_number}ROI:TSRead.SCAN"
+        assert channel.sca.clock_ticks.pvname == f"Xsp3:C{channel_number}SCA:0:Value_RBV"
+        assert channel.mca_sum.array_data.pvname == f"Xsp3:MCASUM{channel_number}:ArrayData"
 
         for mcaroi_number in (47, 48):
             mcaroi = channel.get_mcaroi(mcaroi_number=mcaroi_number)
-            assert (
-                mcaroi.total_rbv.pvname
-                == f"Xsp3:MCA{channel_number}ROI:{mcaroi_number}:Total_RBV"
-            )
+            assert mcaroi.total_rbv.pvname == f"Xsp3:MCA{channel_number}ROI:{mcaroi_number}:Total_RBV"
 
 
 def test_extra_class_members():
@@ -370,10 +323,7 @@ def test_extra_class_members():
         channel_numbers=(3, 5),
         mcaroi_numbers=(4, 6),
         image_data_key="image",
-        extra_class_members={
-            "ten": 10,
-            "a_signal": Component(EpicsSignal, "Signal")
-        },
+        extra_class_members={"ten": 10, "a_signal": Component(EpicsSignal, "Signal")},
     )
 
     assert detector_class.ten == 10
@@ -392,7 +342,7 @@ def test_extra_class_members_failure():
     name as one of the detector class members.
     """
     with pytest.raises(TypeError):
-        detector_class = build_xspress3_class(
+        build_xspress3_class(
             channel_numbers=(3, 5),
             mcaroi_numbers=(4, 6),
             image_data_key="image",
@@ -403,27 +353,21 @@ def test_extra_class_members_failure():
 
 
 def test_channel_numbers():
-    detector_class = build_xspress3_class(
-        channel_numbers=(3, 5), mcaroi_numbers=(4, 6), image_data_key="image"
-    )
+    detector_class = build_xspress3_class(channel_numbers=(3, 5), mcaroi_numbers=(4, 6), image_data_key="image")
     detector = detector_class(prefix="Xsp3:", name="xs3")
 
     assert detector.channel_numbers == (3, 5)
 
 
 def test_get_channel_count():
-    detector_class = build_xspress3_class(
-        channel_numbers=(3, 5), mcaroi_numbers=(4, 6), image_data_key="image"
-    )
+    detector_class = build_xspress3_class(channel_numbers=(3, 5), mcaroi_numbers=(4, 6), image_data_key="image")
     detector = detector_class(prefix="Xsp3:", name="xs3")
 
     assert detector.get_channel_count() == 2
 
 
 def test_get_channel():
-    detector_class = build_xspress3_class(
-        channel_numbers=(3, 5), mcaroi_numbers=(4, 6), image_data_key="image"
-    )
+    detector_class = build_xspress3_class(channel_numbers=(3, 5), mcaroi_numbers=(4, 6), image_data_key="image")
     detector = detector_class(prefix="Xsp3:", name="xs3")
 
     channel03 = detector.get_channel(channel_number=3)
@@ -453,9 +397,7 @@ def test_get_channel():
 
 
 def test_iterate_channels():
-    detector_class = build_xspress3_class(
-        channel_numbers=(3, 5), mcaroi_numbers=(4, 6), image_data_key="image"
-    )
+    detector_class = build_xspress3_class(channel_numbers=(3, 5), mcaroi_numbers=(4, 6), image_data_key="image")
     detector = detector_class(prefix="Xsp3:", name="xs3")
 
     channel_list = list(detector.iterate_channels())
@@ -463,9 +405,7 @@ def test_iterate_channels():
 
 
 def test_xspress3_read_attrs():
-    xspress3_class = build_xspress3_class(
-        channel_numbers=(1, 2), mcaroi_numbers=(3, 4), image_data_key="image"
-    )
+    xspress3_class = build_xspress3_class(channel_numbers=(1, 2), mcaroi_numbers=(3, 4), image_data_key="image")
     detector = xspress3_class(prefix="Xsp3:", name="xs3")
 
     assert detector.read_attrs == []

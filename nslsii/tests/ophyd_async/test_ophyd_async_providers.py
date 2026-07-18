@@ -73,9 +73,7 @@ def test_nsls2_path_provider(
     today = datetime.today()
 
     # Make sure we have to pass the datakey_name as an argument.
-    with pytest.raises(
-        TypeError, match="missing 1 required positional argument: 'datakey_name'"
-    ):
+    with pytest.raises(TypeError, match="missing 1 required positional argument: 'datakey_name'"):
         pp()
 
     info = pp("test")
@@ -96,11 +94,7 @@ def test_nsls2_path_provider(
         assert dirpath.endswith(str(f"{today.year}{ymd_separator}{today.month:02}"))
     elif ymd_granularity == YMDGranularity.day and not include_scan_id_dir:
         assert info.create_dir_depth == -3
-        assert dirpath.endswith(
-            str(
-                f"{today.year}{ymd_separator}{today.month:02}{ymd_separator}{today.day:02}"
-            )
-        )
+        assert dirpath.endswith(str(f"{today.year}{ymd_separator}{today.month:02}{ymd_separator}{today.day:02}"))
     elif ymd_granularity == YMDGranularity.day and include_scan_id_dir:
         assert info.create_dir_depth == -4
         assert dirpath.endswith(
@@ -140,14 +134,10 @@ def test_acq_mode_filename_provider(initial_mode, include_datakey_name):
 
     _check_filename(TomoFrameType.dark)
 
-    with pytest.raises(
-        ValueError, match="20 is not a valid option for <enum 'TomoFrameType'>!"
-    ):
+    with pytest.raises(ValueError, match="20 is not a valid option for <enum 'TomoFrameType'>!"):
         am_fp.switch_mode(20)
 
-    with pytest.raises(
-        TypeError, match="Acquisition mode type must be a subclass of Enum!"
-    ):
+    with pytest.raises(TypeError, match="Acquisition mode type must be a subclass of Enum!"):
         am_fp = AcqModeFilenameProvider(0)
 
     with pytest.raises(

@@ -147,9 +147,7 @@ def fly_maia(
 
     eng_kev = yield from bps.rd(energy.energy.readback)
     if eng_kev is not None:
-        yield from bp.mv(
-            maia.meta_val_beam_energy_sp.value, "{:.2f}".format(eng_kev * 1000)
-        )
+        yield from bp.mv(maia.meta_val_beam_energy_sp.value, "{:.2f}".format(eng_kev * 1000))
 
     @bpp.reset_positions_decorator([hf_stage.x.velocity])
     def _raster_plan():

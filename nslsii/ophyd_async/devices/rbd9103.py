@@ -52,9 +52,7 @@ class RBD9103(StandardReadable, EpicsDevice):
     # Define all the signals for the RBD9103 device
     range: A[SignalRW[RBD9103Range], PvSuffix.rbv("Range"), Format.CONFIG_SIGNAL]
     range_actual: A[SignalR[RBD9103Range], PvSuffix("RangeActual_RBV")]
-    sampling_rate: A[
-        SignalRW[float], PvSuffix.rbv("SamplingRate"), Format.CONFIG_SIGNAL
-    ]
+    sampling_rate: A[SignalRW[float], PvSuffix.rbv("SamplingRate"), Format.CONFIG_SIGNAL]
     sampling_rate_actual: A[SignalR[float], PvSuffix("SamplingRateActual_RBV")]
     offset_null: A[SignalRW[bool], PvSuffix.rbv("OffsetNull"), Format.CONFIG_SIGNAL]
     input: A[SignalRW[RBD9103Input], PvSuffix.rbv("InputGnd"), Format.CONFIG_SIGNAL]
@@ -68,19 +66,13 @@ class RBD9103(StandardReadable, EpicsDevice):
     ]
     num_samples: A[SignalRW[int], PvSuffix.rbv("NumSamples")]
     sample_counter: A[SignalR[int], PvSuffix("SampleCounter_RBV")]
-    avg_only_stable: A[
-        SignalRW[bool], PvSuffix.rbv("AvgOnlyStable"), Format.CONFIG_SIGNAL
-    ]
+    avg_only_stable: A[SignalRW[bool], PvSuffix.rbv("AvgOnlyStable"), Format.CONFIG_SIGNAL]
     current: A[SignalR[float], PvSuffix("Current_RBV"), Format.HINTED_SIGNAL]
     avg_current: A[SignalR[float], PvSuffix("AvgCurrent_RBV"), Format.HINTED_SIGNAL]
     current_units: A[SignalR[str], PvSuffix("CurrentUnits_RBV"), Format.CONFIG_SIGNAL]
     stable: A[SignalR[bool], PvSuffix("Stable_RBV"), Format.HINTED_SIGNAL]
-    avg_current_units: A[
-        SignalR[str], PvSuffix("AvgCurrentUnits_RBV"), Format.CONFIG_SIGNAL
-    ]
-    in_range: A[
-        SignalR[RBD9103InRangeState], PvSuffix("InRange_RBV"), Format.HINTED_SIGNAL
-    ]
+    avg_current_units: A[SignalR[str], PvSuffix("AvgCurrentUnits_RBV"), Format.CONFIG_SIGNAL]
+    in_range: A[SignalR[RBD9103InRangeState], PvSuffix("InRange_RBV"), Format.HINTED_SIGNAL]
 
     def __init__(self, prefix: str, timeout=5.0, name: str = ""):
         super().__init__(prefix=prefix, name=name)
@@ -91,10 +83,7 @@ class RBD9103(StandardReadable, EpicsDevice):
     @AsyncStatus.wrap
     async def stage(self):
         set_sampling_rate = await self.sampling_rate.get_value()
-        if (
-            set_sampling_rate < self._min_sampling_rate
-            or set_sampling_rate > self._max_sampling_rate
-        ):
+        if set_sampling_rate < self._min_sampling_rate or set_sampling_rate > self._max_sampling_rate:
             raise ValueError(
                 f"Sampling rate must be between {self._min_sampling_rate} and {self._max_sampling_rate} ms"
             )

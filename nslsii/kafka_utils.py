@@ -43,9 +43,7 @@ def _read_bluesky_kafka_config_file(config_file_path):
         "runengine_producer_config",
     )
     missing_required_sections = [
-        required_section
-        for required_section in required_sections
-        if required_section not in bluesky_kafka_config
+        required_section for required_section in required_sections if required_section not in bluesky_kafka_config
     ]
 
     if missing_required_sections:
@@ -66,9 +64,7 @@ _SubscribeKafkaPublisherDetails = namedtuple(
 )
 
 
-def _subscribe_kafka_publisher(
-    RE, beamline_name, bootstrap_servers, producer_config, _publisher_factory=None
-):
+def _subscribe_kafka_publisher(RE, beamline_name, bootstrap_servers, producer_config, _publisher_factory=None):
     """
     Subscribe a RunRouter to the specified RE to create Kafka Publishers.
     Each Publisher will publish documents from a single run to the
@@ -142,9 +138,7 @@ def _subscribe_kafka_publisher(
                 producer_config=producer_config,
                 timeout=5.0,
             )
-            logging.getLogger("nslsii").info(
-                "connected to Kafka broker(s): %s", cluster_metadata
-            )
+            logging.getLogger("nslsii").info("connected to Kafka broker(s): %s", cluster_metadata)
             return [publish_or_abort_run], []
         except (BaseException, Exception) as exc:
             # log the exception and re-raise it to indicate no connection could be made to a Kafka broker
@@ -156,9 +150,7 @@ def _subscribe_kafka_publisher(
     runrouter_token = RE.subscribe(rr)
 
     # log this only once
-    logging.getLogger("nslsii").info(
-        "RE will publish documents to Kafka topic '%s'", topic
-    )
+    logging.getLogger("nslsii").info("RE will publish documents to Kafka topic '%s'", topic)
 
     subscribe_kafka_publisher_details = _SubscribeKafkaPublisherDetails(
         beamline_topic=topic,
@@ -222,21 +214,16 @@ def _subscribe_kafka_queue_thread_publisher(
         un-subscribe the function from the RunEngine, in case someone ever wants to do that.
 
     """
-    from bluesky_kafka import BlueskyKafkaException
     from bluesky_kafka.tools.queue_thread import build_kafka_publisher_queue_and_thread
 
     nslsii_logger = logging.getLogger("nslsii")
     beamline_runengine_topic = None
-    kafka_publisher_token = None
-    publisher_thread_stop_event = None
     kafka_publisher_re_token = None
     publisher_queue_thread_details = None
 
     try:
         nslsii_logger.info("connecting to Kafka broker(s): '%s'", bootstrap_servers)
-        beamline_runengine_topic = (
-            f"{beamline_name.lower()}.bluesky.runengine.documents"
-        )
+        beamline_runengine_topic = f"{beamline_name.lower()}.bluesky.runengine.documents"
 
         publisher_queue_thread_details = build_kafka_publisher_queue_and_thread(
             topic=beamline_runengine_topic,
@@ -245,13 +232,7 @@ def _subscribe_kafka_queue_thread_publisher(
             publisher_queue_timeout=publisher_queue_timeout,
         )
 
-        publisher_thread_stop_event = (
-            publisher_queue_thread_details.publisher_thread_stop_event
-        )
-
-        kafka_publisher_re_token = RE.subscribe(
-            publisher_queue_thread_details.put_on_publisher_queue
-        )
+        kafka_publisher_re_token = RE.subscribe(publisher_queue_thread_details.put_on_publisher_queue)
 
         nslsii_logger.info(
             "RunEngine will publish bluesky documents on Kafka topic '%s'",
@@ -269,14 +250,12 @@ def _subscribe_kafka_queue_thread_publisher(
             beamline_runengine_topic,
         )
 
-    subscribe_kafka_queue_thread_publisher_details = (
-        _SubscribeKafkaQueueThreadPublisherDetails(
-            beamline_topic=beamline_runengine_topic,
-            bootstrap_servers=bootstrap_servers,
-            producer_config=producer_config,
-            publisher_queue_thread_details=publisher_queue_thread_details,
-            re_subscribe_token=kafka_publisher_re_token,
-        )
+    subscribe_kafka_queue_thread_publisher_details = _SubscribeKafkaQueueThreadPublisherDetails(
+        beamline_topic=beamline_runengine_topic,
+        bootstrap_servers=bootstrap_servers,
+        producer_config=producer_config,
+        publisher_queue_thread_details=publisher_queue_thread_details,
+        re_subscribe_token=kafka_publisher_re_token,
     )
 
     return subscribe_kafka_queue_thread_publisher_details

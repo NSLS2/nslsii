@@ -12,10 +12,11 @@ def csx_fix_scaler_shape(d):
     Ensure that their shape is [].
     """
     d = copy.deepcopy(d)
-    for k, v in list(d['data_keys'].items()):
-        if v['source'].startswith('PV:XF:23ID1-ES{Sclr:1}Wfrm'):
-            d['data_keys'][k]['shape'] = []
+    for k, v in list(d["data_keys"].items()):
+        if v["source"].startswith("PV:XF:23ID1-ES{Sclr:1}Wfrm"):
+            d["data_keys"][k]["shape"] = []
     return d
+
 
 def srx_transform_resource(doc):
     """
@@ -24,9 +25,9 @@ def srx_transform_resource(doc):
     needed because root_map is not sufficient in this case.
     """
     doc = dict(doc)
-    full_path = os.path.join(doc['root'], doc['resource_path'])
-    new_path = full_path.replace('/nsls2/xf05id1/XF05ID1', '/nsls2/data/srx/legacy/xf05id1/XF05ID1')
-    doc['root'] = ''
-    doc['resource_path'] = new_path
+    full_path = os.path.join(doc["root"], doc["resource_path"])
+    new_path = full_path.replace("/nsls2/xf05id1/XF05ID1", "/nsls2/data/srx/legacy/xf05id1/XF05ID1")
+    doc["root"] = ""
+    doc["resource_path"] = new_path
 
     return doc

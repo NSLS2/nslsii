@@ -27,7 +27,13 @@ def get_parent_directory(catalog: CatalogOfBlueskyRuns) -> str:
                 return parent_directory
 
 
-def find_proposals(client: CatalogOfBlueskyRuns, pi_name: str, cycle: str = None, optional_queries: dict = None, show_title: bool = True):
+def find_proposals(
+    client: CatalogOfBlueskyRuns,
+    pi_name: str,
+    cycle: str = None,
+    optional_queries: dict = None,
+    show_title: bool = True,
+):
     """
     Find proposals for a given PI name and optionally filter by cycle.
     Parameters
@@ -82,35 +88,23 @@ def find_proposals(client: CatalogOfBlueskyRuns, pi_name: str, cycle: str = None
                 elif operator == "!=":
                     results = results.search(NotEq(key, operand))
                 elif operator in operation_mapping:
-                    results = results.search(
-                        Comparison(operation_mapping[operator], key, operand)
-                    )
+                    results = results.search(Comparison(operation_mapping[operator], key, operand))
                 else:
-                    raise ValueError(
-                        f"Unsupported operator '{operator}' in optional_queries."
-                    )
+                    raise ValueError(f"Unsupported operator '{operator}' in optional_queries.")
             else:
-                raise ValueError(
-                    f"Invalid value for optional_query key '{key}': {value}"
-                )
+                raise ValueError(f"Invalid value for optional_query key '{key}': {value}")
 
-    proposal_distinct = results.distinct(
-        f"{sql_prefix}proposal.proposal_id", counts=True
-    )
+    proposal_distinct = results.distinct(f"{sql_prefix}proposal.proposal_id", counts=True)
 
     proposal_info = {}
     if len(proposal_distinct["metadata"]) > 0:
         for item in proposal_distinct["metadata"]["start.proposal.proposal_id"]:
             if item["count"] > 0:
-                proposal_results = results.search(
-                    Key("proposal.proposal_id") == item["value"]
-                )
+                proposal_results = results.search(Key("proposal.proposal_id") == item["value"])
                 scan_single = proposal_results.values().first()
                 parent_path = get_parent_directory(proposal_results)
 
-                proposal_info[item["value"]] = {
-                    "pi_name": scan_single.start["proposal"]["pi_name"]
-                }
+                proposal_info[item["value"]] = {"pi_name": scan_single.start["proposal"]["pi_name"]}
                 if cycle is not None:
                     proposal_info[item["value"]]["proposal_info"] = {
                         "cycle": cycle,
@@ -118,9 +112,7 @@ def find_proposals(client: CatalogOfBlueskyRuns, pi_name: str, cycle: str = None
                         "path": f"{parent_path}/{cycle}/pass-{item['value']}/",
                     }
                 else:
-                    cycle_distinct = proposal_results.distinct(
-                        f"{sql_prefix}cycle", counts=True
-                    )
+                    cycle_distinct = proposal_results.distinct(f"{sql_prefix}cycle", counts=True)
                     proposal_info[item["value"]]["proposal_info"] = [
                         {
                             "cycle": elem["value"],
@@ -131,8 +123,6 @@ def find_proposals(client: CatalogOfBlueskyRuns, pi_name: str, cycle: str = None
                     ]
 
                 if show_title:
-                    proposal_info[item["value"]]["title"] = scan_single.start[
-                        "proposal"
-                    ]["title"]
+                    proposal_info[item["value"]]["title"] = scan_single.start["proposal"]["title"]
 
     pprint(proposal_info)

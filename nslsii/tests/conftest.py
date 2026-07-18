@@ -1,46 +1,46 @@
 from contextlib import contextmanager  # noqa
 
-import redis
 
 import pytest
 
 from bluesky.tests.conftest import RE  # noqa
 from ophyd.tests.conftest import hw  # noqa
 
+
 def pytest_addoption(parser):
     parser.addoption(
         "--xs3-root-path",
         action="store",
         default=None,
-        help="path to bluesky 'root' directory where xspress3 writes data files"
+        help="path to bluesky 'root' directory where xspress3 writes data files",
     )
 
     parser.addoption(
         "--xs3-path-template",
         action="store",
         default=None,
-        help="path to directory where xspress3 will write files"
+        help="path to directory where xspress3 will write files",
     )
 
     parser.addoption(
         "--xs3-pv-prefix",
         action="store",
         default=None,
-        help="PV prefix for xspress3, for example `XF:05IDD-ES{Xsp:1}:`"
+        help="PV prefix for xspress3, for example `XF:05IDD-ES{Xsp:1}:`",
     )
 
     parser.addoption(
         "--xs3-channel-numbers",
         action="store",
         default=None,
-        help="comma-separated xspress3 channel numbers, for example `1,2,3`"
+        help="comma-separated xspress3 channel numbers, for example `1,2,3`",
     )
 
     parser.addoption(
         "--xs3-mcaroi-numbers",
         action="store",
         default=None,
-        help="comma-separated xspress3 mcaroi numbers, for example `1,2,3`"
+        help="comma-separated xspress3 mcaroi numbers, for example `1,2,3`",
     )
 
 

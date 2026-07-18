@@ -50,9 +50,7 @@ def test_hdf5plugin(xs3_pv_prefix):
 
     xspress3.hdf5plugin.stage()
 
-    assert re.match(
-        r"\/a\/b\/c\/\d{4}\/\d{2}\/\d{2}", xspress3.hdf5plugin.file_path.get()
-    )
+    assert re.match(r"\/a\/b\/c\/\d{4}\/\d{2}\/\d{2}", xspress3.hdf5plugin.file_path.get())
     assert re.match(r"\w{8}\-\w{4}\-\w{4}\-\w{4}", xspress3.hdf5plugin.file_name.get())
     assert xspress3.hdf5plugin.file_number.get() == 0
 
@@ -63,9 +61,7 @@ def test_hdf5plugin(xs3_pv_prefix):
         xspress3.hdf5plugin._resource["resource_path"],
     )
 
-    xspress3.hdf5plugin.generate_datum(
-        key=None, timestamp=datetime.datetime.now(), datum_kwargs={}
-    )
+    xspress3.hdf5plugin.generate_datum(key=None, timestamp=datetime.datetime.now(), datum_kwargs={})
 
     # expect one resource document and
     #   one datum document for each channel
@@ -230,9 +226,7 @@ def test_document_stream(
 
     filled_documents = list()
 
-    with Filler(
-        {Xspress3HDF5Handler.HANDLER_NAME: Xspress3HDF5Handler}, inplace=True
-    ) as filler:
+    with Filler({Xspress3HDF5Handler.HANDLER_NAME: Xspress3HDF5Handler}, inplace=True) as filler:
         for name, document in document_list:
             assert name in expected_document_names
             actual_document_names.append(name)

@@ -5,12 +5,31 @@ name = "nslsii"
 platforms = ["linux-64"]
 version = "0.1.0"
 
-[tasks]
-
 [dependencies]
-python = ">=3.10,<3.15"
-redis-py = ">=7.1.0,<8"
-pytest = ">=9.0.3,<10"
+python = ">=3.10,<3.13"
 
-[pypi-dependencies]
-nslsii = { path = ".", editable = true }
+[feature.dev.pypi-dependencies]
+nslsii = { path = ".", editable = true, extras = ["dev"] }
+
+[feature.dev.tasks]
+build = "python -m build"
+check = "pre-commit run --all-files"
+coverage = "coverage run -m pytest -s -v && coverage report"
+format = "ruff format --force-exclude ."
+lint = "ruff check --force-exclude ."
+test = "pytest"
+
+[feature.py310.dependencies]
+python = "3.10.*"
+
+[feature.py311.dependencies]
+python = "3.11.*"
+
+[feature.py312.dependencies]
+python = "3.12.*"
+
+[environments]
+dev = ["dev"]
+py310 = ["dev", "py310"]
+py311 = ["dev", "py311"]
+py312 = ["dev", "py312"]

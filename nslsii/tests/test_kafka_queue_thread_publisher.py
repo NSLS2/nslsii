@@ -10,6 +10,7 @@ import nslsii.kafka_utils
 
 import pytest
 
+
 @pytest.mark.skip(reason="bluesky kafka is deprecated.")
 def test_build_and_subscribe_kafka_queue_thread_publisher(
     kafka_bootstrap_servers,
@@ -60,10 +61,7 @@ def test_build_and_subscribe_kafka_queue_thread_publisher(
 
     # use a random string as the beamline name so topics will not be duplicated across tests
     beamline_name = str(uuid.uuid4())[:8]
-    with temporary_topics(topics=[f"{beamline_name}.bluesky.runengine.documents"]) as (
-        beamline_topic,
-    ):
-
+    with temporary_topics(topics=[f"{beamline_name}.bluesky.runengine.documents"]) as (beamline_topic,):
         subscribe_kafka_queue_thread_publisher_details = (
             nslsii.kafka_utils._subscribe_kafka_queue_thread_publisher(
                 RE=RE,
@@ -77,13 +75,8 @@ def test_build_and_subscribe_kafka_queue_thread_publisher(
             )
         )
 
-        assert (
-            subscribe_kafka_queue_thread_publisher_details.beamline_topic
-            == beamline_topic
-        )
-        assert isinstance(
-            subscribe_kafka_queue_thread_publisher_details.re_subscribe_token, int
-        )
+        assert subscribe_kafka_queue_thread_publisher_details.beamline_topic == beamline_topic
+        assert isinstance(subscribe_kafka_queue_thread_publisher_details.re_subscribe_token, int)
 
         published_bluesky_documents = []
 
@@ -108,20 +101,12 @@ def test_build_and_subscribe_kafka_queue_thread_publisher(
 
         # sanitize_doc normalizes some document data, such as numpy arrays, that are
         # problematic for direct comparison of documents by 'assert'
-        sanitized_published_bluesky_documents = [
-            sanitize_doc(doc) for doc in published_bluesky_documents
-        ]
-        sanitized_consumed_bluesky_documents = [
-            sanitize_doc(doc) for doc in consumed_bluesky_documents
-        ]
+        sanitized_published_bluesky_documents = [sanitize_doc(doc) for doc in published_bluesky_documents]
+        sanitized_consumed_bluesky_documents = [sanitize_doc(doc) for doc in consumed_bluesky_documents]
 
-        assert len(sanitized_consumed_bluesky_documents) == len(
-            sanitized_published_bluesky_documents
-        )
-        assert (
-            sanitized_consumed_bluesky_documents
-            == sanitized_published_bluesky_documents
-        )
+        assert len(sanitized_consumed_bluesky_documents) == len(sanitized_published_bluesky_documents)
+        assert sanitized_consumed_bluesky_documents == sanitized_published_bluesky_documents
+
 
 @pytest.mark.skip(reason="bluesky kafka is deprecated.")
 def test_no_beamline_topic(kafka_bootstrap_servers, RE):
@@ -165,6 +150,7 @@ def test_no_beamline_topic(kafka_bootstrap_servers, RE):
     finally:
         nslsii_logger.removeHandler(hdlr=logging_test_handler)
 
+
 @pytest.mark.skip(reason="bluesky kafka is deprecated.")
 def test_publisher_with_no_broker(RE, hw):
     """
@@ -203,7 +189,7 @@ def test_publisher_with_no_broker(RE, hw):
 
     # timeout is set at 1s but it takes longer than 5s to run count
     # so running count should take less than 10s
-    print(f"time for count: {t1-t0:.3f}")
+    print(f"time for count: {t1 - t0:.3f}")
     assert (t1 - t0) < 10.0
 
     # the RunEngine should have published 4 documents
