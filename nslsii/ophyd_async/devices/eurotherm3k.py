@@ -1,4 +1,4 @@
-import time
+import asyncio
 from typing import Annotated as A
 
 from ophyd_async.core import (
@@ -69,21 +69,37 @@ class Eurotherm3kLoop(StandardReadable, EpicsDevice):
     async def set(self, value: float) -> None:
         # 1. command the setpoint (waits for the write to be accepted)
         await self.setpoint.set(value)
-        # 2. watch the readback until it settles, or time out overall
-        in_band_since: float | None = None
-        async for current in observe_value(
-            self.readback, done_timeout=self.move_timeout
-        ):
-            if abs(current - value) <= self.tolerance:
+
+        async def _reach_band() -> None:
+            """Return once the readback is within tolerance of the target."""
+            async for current in observe_value(self.readback):
+                if abs(current - value) <= self.tolerance:
+                    return
+
+        async def _leave_band() -> None:
+            """Return if/when the readback leaves the tolerance band."""
+            async for current in observe_value(self.readback):
+                if abs(current - value) > self.tolerance:
+                    return
+
+        async def _settle() -> None:
+            while True:
+                await _reach_band()
                 if self.settle_time <= 0:
                     return  # "first touch" mode: done
-                now = time.monotonic()
-                if in_band_since is None:
-                    in_band_since = now  # entered the band, start the hold timer
-                elif now - in_band_since >= self.settle_time:
-                    return  # held in band long enough: done
-            else:
-                in_band_since = None  # left the band, reset the hold timer
+                try:
+                    # Stay settled unless the readback leaves the band within
+                    # settle_time. A stable PV that stops updating while in band
+                    # just times out here -> treated as "held long enough", so a
+                    # settled controller no longer blocks until move_timeout.
+                    await asyncio.wait_for(_leave_band(), timeout=self.settle_time)
+                except asyncio.TimeoutError:
+                    return  # held in band for settle_time: done
+                # left the band before settling -> loop and re-reach
+
+        # Enforce the overall timeout. On Python >= 3.11 asyncio.TimeoutError is
+        # the builtin TimeoutError, so callers can catch TimeoutError.
+        await asyncio.wait_for(_settle(), timeout=self.move_timeout)
 
 
 class Eurotherm3k(StandardReadable, EpicsDevice):
