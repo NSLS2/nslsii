@@ -1,3 +1,5 @@
+import time
+
 import pytest
 from ophyd_async.core import get_mock_put, init_devices, set_mock_value
 
@@ -48,7 +50,28 @@ async def test_set_commands_setpoint_and_settles():
     # pretend the controller is already at temperature
     set_mock_value(dev.loop1.readback, 300.0)
     await dev.loop1.set(300.0)  # returns => it settled
-    get_mock_put(dev.loop1.setpoint).assert_called_once()  # and it wrote the setpoint
+    # it wrote the commanded setpoint (not just "something")
+    get_mock_put(dev.loop1.setpoint).assert_called_once_with(300.0)
+
+
+@pytest.mark.asyncio
+async def test_set_holds_in_band_for_settle_time():
+    """With settle_time > 0, set() waits the hold time even if the readback is
+    already in band and stops updating -- and must not block until move_timeout."""
+    async with init_devices(mock=True):
+        dev = Eurotherm3k(PREFIX, name="et")
+    dev.loop1.tolerance = 1.0
+    dev.loop1.settle_time = 0.2
+    dev.loop1.move_timeout = 5.0
+    # already in band and stable (no further updates arrive)
+    set_mock_value(dev.loop1.readback, 300.0)
+    start = time.monotonic()
+    await dev.loop1.set(300.0)
+    elapsed = time.monotonic() - start
+    # waited ~settle_time, and crucially did NOT hang until move_timeout
+    assert elapsed >= 0.2
+    assert elapsed < dev.loop1.move_timeout
+    get_mock_put(dev.loop1.setpoint).assert_called_once_with(300.0)
 
 
 @pytest.mark.asyncio
