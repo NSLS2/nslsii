@@ -6,7 +6,7 @@ from ophyd_async.core import (
     AsyncStatus,
 )
 from ophyd_async.core import StandardReadableFormat as Format
-from ophyd_async.epics.signal import PvSuffix, EpicsDevice
+from ophyd_async.epics.core import PvSuffix, EpicsDevice
 from typing import Annotated as A
 
 
