@@ -61,7 +61,7 @@ test_bluesky_kafka_config_security_section = """\
     - "{endstation}.bluesky.runengine.{document_name}.documents"
 """
 
-
+@pytest.mark.skip(reason="bluesky kafka is deprecated.")
 def test_bluesky_kafka_config_path_env_var(tmp_path, RE, temporary_topics):
     """Test specifying a configuration file path by environment variable."""
     with temporary_topics(topics=["abc.bluesky.runengine.documents"]) as (
@@ -83,7 +83,7 @@ def test_bluesky_kafka_config_path_env_var(tmp_path, RE, temporary_topics):
             test_config_file_path
         )
 
-
+@pytest.mark.skip(reason="bluesky kafka is deprecated.")
 def test_bluesky_kafka_config_path_env_var_negative(tmp_path, RE):
     """Test specifying a configuration file path that does not exist by environment variable."""
     # write a temporary file for this test
@@ -92,7 +92,7 @@ def test_bluesky_kafka_config_path_env_var_negative(tmp_path, RE):
     with pytest.raises(FileNotFoundError, match=str(test_config_file_path)):
         bluesky_kafka_configuration = configure_kafka_publisher(RE, "abc")
 
-
+@pytest.mark.skip(reason="bluesky kafka is deprecated.")
 def test_bluesky_kafka_config_path_default_negative(tmp_path, RE):
     """Test the default configuration file path.
 
@@ -106,7 +106,7 @@ def test_bluesky_kafka_config_path_default_negative(tmp_path, RE):
     with pytest.raises(FileNotFoundError, match="/etc/bluesky/kafka.yml"):
         bluesky_kafka_configuration = configure_kafka_publisher(RE, "abc")
 
-
+@pytest.mark.skip(reason="bluesky kafka is deprecated.")
 def test__read_bluesky_kafka_config_file(tmp_path):
     # write a temporary file for this test
     test_config_file_path = tmp_path / "bluesky_kafka_config_content.yml"
@@ -127,7 +127,7 @@ def test__read_bluesky_kafka_config_file(tmp_path):
     assert runengine_producer_config["message.timeout.ms"] == 3000
     assert runengine_producer_config["compression.codec"] == "snappy"
 
-
+@pytest.mark.skip(reason="bluesky kafka is deprecated.")
 def test__read_bluesky_kafka_config_file_producer_consumer_security(tmp_path):
     # write a temporary file for this test
     test_config_file_path = tmp_path / "bluesky_kafka_config_content.yml"
@@ -163,7 +163,7 @@ def test__read_bluesky_kafka_config_file_producer_consumer_security(tmp_path):
         == "/etc/ssl/certs/ca-bundle.crt"
     )
 
-
+@pytest.mark.skip(reason="bluesky kafka is deprecated.")
 def test__read_bluesky_kafka_config_file_runengine_topics(tmp_path):
     # write a temporary file for this test
     test_config_file_path = tmp_path / "bluesky_kafka_config_content.yml"
@@ -180,7 +180,7 @@ def test__read_bluesky_kafka_config_file_runengine_topics(tmp_path):
         == "{endstation}.bluesky.runengine.{document_name}.documents"
     )
 
-
+@pytest.mark.skip(reason="bluesky kafka is deprecated.")
 def test__read_bluesky_kafka_config_file_failure(tmp_path):
     """Raise FileNotFoundError if the configuration file does not exist.
 
@@ -191,7 +191,7 @@ def test__read_bluesky_kafka_config_file_failure(tmp_path):
     with pytest.raises(FileNotFoundError, match=str(test_config_file_path)):
         _read_bluesky_kafka_config_file(str(test_config_file_path))
 
-
+@pytest.mark.skip(reason="bluesky kafka is deprecated.")
 def test__read_bluesky_kafka_config_file_missing_sections(tmp_path):
     """Raise Exception if the configuration file is missing one or more required sections.
 
@@ -209,7 +209,7 @@ def test__read_bluesky_kafka_config_file_missing_sections(tmp_path):
     ):
         _read_bluesky_kafka_config_file(str(test_config_file_path))
 
-
+@pytest.mark.skip(reason="bluesky kafka is deprecated.")
 def test_configure_kafka_publisher_abort_run_true(tmp_path, RE):
     """Test Kafka publisher is configured correctly in the case
     abort_run_on_kafka_exception: true
@@ -230,7 +230,7 @@ def test_configure_kafka_publisher_abort_run_true(tmp_path, RE):
     )
     assert publisher_details.re_subscribe_token == 0
 
-
+@pytest.mark.skip(reason="bluesky kafka is deprecated.")
 def test_configure_kafka_publisher_abort_run_false(tmp_path, RE):
     """Test Kafka publisher is configured correctly in the case
     abort_run_on_kafka_exception: false

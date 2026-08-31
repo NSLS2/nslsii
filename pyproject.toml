@@ -1,0 +1,157 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "nslsii"
+description = "Tools for data collection and analysis at NSLS-II"
+readme = { file = "README.md", content-type = "text/markdown" }
+license = { file = "LICENSE" }
+authors = [{ name = "Brookhaven National Laboratory" }]
+requires-python = ">=3.11"
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "License :: OSI Approved :: BSD License",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Physics",
+]
+dependencies = [
+  "appdirs",
+  "bluesky-kafka>=0.8.0",
+  "bluesky>=1.8.1",
+  "caproto",
+  "databroker",
+  "h5py",
+  "httpx",
+  "ipython",
+  "ipywidgets",
+  "ldap3",
+  "matplotlib",
+  "msgpack>=1.0.0",
+  "msgpack-numpy",
+  "numpy",
+  "opencv-python",
+  "ophyd",
+  "ophyd-async[ca]",
+  "packaging",
+  "pillow",
+  "psutil",
+  "pycryptodome",
+  "pyolog",
+  "PyYAML",
+  "redis",
+  "redis-json-dict",
+  "requests",
+  "shortuuid",
+]
+dynamic = ["version"]
+
+[dependency-groups]
+dev = [
+  "area_detector_handlers",
+  "attrs>=17.4.0",
+  "build",
+  "coverage",
+  "doct",
+  "ipython",
+  "matplotlib",
+  "numpydoc",
+  "pims",
+  "pre-commit",
+  "pytest",
+  "pytest-asyncio",
+  "pytz",
+  "ruff",
+  "sphinx",
+  "sphinx_rtd_theme",
+]
+
+[project.scripts]
+sync-experiment = "nslsii.sync_experiment:main"
+what-is-ioc = "nslsii.epics_utils:main"
+axis-saver-ioc = "nslsii.iocs.caproto_saver:start_axis_ioc"
+
+[project.urls]
+Homepage = "https://github.com/NSLS2/nslsii"
+"Bug Reports" = "https://github.com/NSLS2/nslsii/issues"
+
+[tool.hatch]
+version.source = "vcs"
+
+[tool.hatch.build]
+artifacts = ["nslsii/_version.py"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/docs",
+  "/nslsii",
+  "/scripts",
+  "/LICENSE",
+  "/README.md",
+  "/pyproject.toml",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["nslsii"]
+
+[tool.hatch.build.hooks.vcs]
+version-file = "nslsii/_version.py"
+
+[tool.hatch.version.raw-options]
+local_scheme = "no-local-version"
+
+[tool.pytest.ini_options]
+log_cli = true
+log_cli_format = "%(asctime)s - %(threadName)s - %(name)s - [%(filename)s #%(lineno)s] - %(levelname)s - %(message)s"
+log_cli_level = "WARNING"
+testpaths = ["nslsii/tests"]
+
+[tool.ruff]
+line-length = 115
+target-version = "py310"
+exclude = [
+  ".git",
+  ".pixi",
+  ".venv",
+  "build",
+  "dist",
+  "docs/source/conf.py",
+  "nslsii",              # TODO: Reformat progressively to not disturb active PRs
+]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+
+[tool.pixi.pypi-dependencies]
+nslsii = { path = ".", editable = true }
+
+[tool.pixi.feature.dev.tasks]
+build = "python -m build"
+check = "pre-commit run --all-files"
+coverage = "coverage run -m pytest -s -v && coverage report"
+format = "ruff format --force-exclude ."
+lint = "ruff check --force-exclude ."
+test = "pytest"
+
+[tool.pixi.feature.py311.dependencies]
+python = "3.11.*"
+
+[tool.pixi.feature.py312.dependencies]
+python = "3.12.*"
+
+[tool.pixi.feature.py313.dependencies]
+python = "3.13.*"
+
+[tool.pixi.environments]
+default = { solve-group = "default" }
+dev = { features = ["dev"], solve-group = "default" }
+py311 = ["dev", "py311"]
+py312 = ["dev", "py312"]
+py313 = ["dev", "py313"]

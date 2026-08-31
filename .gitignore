@@ -2,6 +2,8 @@ ipython_log.py
 
 *.code-workspace
 
+*/_version.py
+
 .idea/
 .vscode/
 
@@ -110,3 +112,7 @@ ENV/
 
 #
 .DS_Store
+
+# pixi environments
+.pixi/*
+!.pixi/config.toml

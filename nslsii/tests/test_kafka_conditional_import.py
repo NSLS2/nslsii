@@ -4,7 +4,7 @@ import sys
 
 import pytest
 
-
+@pytest.mark.skip(reason="bluesky kafka is deprecated.")
 def test_conditional_import_negative_case():
     """
     Test that bluesky_kafka is not imported when publish_documents_with_kafka=False.
@@ -69,7 +69,7 @@ test_bluesky_kafka_config = """\
     compression.codec: snappy
 """
 
-
+@pytest.mark.skip(reason="bluesky kafka is deprecated.")
 def test_conditional_import_positive_case(tmp_path):
     """
     Test that bluesky_kafka is imported when publish_documents_with_kafka=True.

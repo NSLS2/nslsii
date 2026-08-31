@@ -13,7 +13,7 @@ jobs:
 
     strategy:
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.11", "3.12", "3.13"]
 
       fail-fast: false
     steps:
@@ -23,11 +23,6 @@ jobs:
     - name: Start Redis
       uses: supercharge/redis-github-action@1.4.0
 
-    - name: start Kafka and Zookeeper
-      run: docker compose -f scripts/bitnami-kafka-docker-compose.yml up -d
-
-    - name: is Kafka running?
-      run: docker ps -a
 
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v2
@@ -39,8 +34,7 @@ jobs:
       run: |
         set -vxeuo pipefail
         pip install --upgrade pip wheel
-        pip install .
-        pip install -r requirements-dev.txt
+        pip install . --group dev
         pip list
 
     - name: Test with pytest

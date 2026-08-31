@@ -11,7 +11,7 @@ from bluesky.plans import count
 from bluesky_kafka import BlueskyKafkaException
 from event_model import sanitize_doc
 
-
+@pytest.mark.skip(reason="bluesky kafka is deprecated.")
 def test__subscribe_kafka_publisher(
     kafka_bootstrap_servers,
     temporary_topics,
@@ -125,7 +125,7 @@ def test__subscribe_kafka_publisher(
                 == sanitized_published_bluesky_documents[i]
             )
 
-
+@pytest.mark.skip(reason="bluesky kafka is deprecated.")
 def test_no_broker(
     temporary_topics,
     RE,
@@ -183,7 +183,7 @@ def test_no_broker(
         assert len(published_bluesky_documents) == 1
         assert published_bluesky_documents[0][0] == "stop"
 
-
+@pytest.mark.skip(reason="bluesky kafka is deprecated.")
 def test_exception_on_publisher_call(
     kafka_bootstrap_servers,
     temporary_topics,

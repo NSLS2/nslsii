@@ -2,17 +2,22 @@ import logging
 import os
 import sys
 import warnings
+from importlib.metadata import PackageNotFoundError, version
 from logging.handlers import SysLogHandler, TimedRotatingFileHandler
 from pathlib import Path
 
 import appdirs
 from IPython import get_ipython
 
-from ._version import get_versions
+from .utils import open_redis_client
 
-__version__ = get_versions()["version"]
-del get_versions
-
+try:
+    from ._version import __version__
+except ImportError:
+    try:
+        __version__ = version("nslsii")
+    except PackageNotFoundError:
+        __version__ = "unknown"
 
 bluesky_log_file_path = None
 
@@ -40,7 +45,10 @@ def configure_base(
     publish_documents_with_kafka=False,
     tb_minimize=True,
     redis_url=None,
+    redis_port=6379,
+    redis_ssl=False,
     redis_prefix="",
+    redis_db: int = 0,
 ):
     """
     Perform base setup and instantiation of important objects.
@@ -103,6 +111,16 @@ def configure_base(
         broker_name is a string. If a string is used, it will override the TLA for the auto-configured topic.
     tb_minimize : boolean, optional
         If IPython should print out 'minimal' tracebacks.
+    redis_url : str | None, optional
+        The Redis URL. If None, no Redis is used. Default is None.
+    redis_port : int, optional
+        The Redis port. 6379 by default.
+    redis_ssl : bool, optional
+        Set to True to use SSL. False by default.
+    redis_prefix : str, optional
+        Set the prefix for the Redis key. Typically the endstation prefix, e.g. "arpes-". "" by default.
+    redis_db : int, optional
+        Set the database index for the Redis connection. Defaults to 0.
 
     Returns
     -------
@@ -135,7 +153,18 @@ def configure_base(
         from redis import Redis
         from redis_json_dict import RedisJSONDict
 
-        md = RedisJSONDict(Redis(redis_url), prefix=redis_prefix)
+        redis_client = open_redis_client(
+            redis_ssl=redis_ssl,
+            redis_url=redis_url,
+            redis_db=redis_db,
+        )
+        if redis_prefix and redis_ssl:
+            raise ValueError(
+                f"Incompatible arguments: '{redis_prefix=}' and '{redis_ssl=}'. Prefixes are no longer supported "
+                f"when using SSL encryption. Specify `redis_db` if you want to use a distinct set of keys with '{redis_ssl=}'."
+            )
+        prefix = redis_prefix if redis_prefix and not redis_ssl else ""
+        md = RedisJSONDict(redis_client=redis_client, prefix=prefix)
 
     # if RunEngine already defined grab it
     # useful when users make their own custom RunEngine
