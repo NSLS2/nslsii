@@ -1,5 +1,6 @@
 from datetime import datetime
 from enum import Enum
+from unittest.mock import patch
 import pytest
 import os
 from ophyd_async.core import StaticFilenameProvider
@@ -7,6 +8,8 @@ from ophyd_async.core import StaticFilenameProvider
 from nslsii.ophyd_async import (
     YMDGranularity,
     AcqModeFilenameProvider,
+    TimestampFilenameProvider,
+    REMetadataFilenameProvider,
     NSLS2PathProvider,
 )
 
@@ -145,3 +148,69 @@ def test_acq_mode_filename_provider(initial_mode, include_datakey_name):
         match="Initial acquisition mode 20 is not a valid option for <enum 'TomoFrameType'>!",
     ):
         am_fp = AcqModeFilenameProvider(TomoFrameType, initial_mode=20)
+
+
+FIXED_NOW = datetime(2025, 3, 15, 10, 30, 45)
+
+
+@pytest.mark.parametrize(
+    ("timestamp_format", "datakey_name", "expected"),
+    [
+        ("%Y%m%d_%H%M%S", None, "20250315_103045"),
+        ("%Y%m%d_%H%M%S", "det1", "det1_20250315_103045"),
+        ("%Y-%m-%d", None, "2025-03-15"),
+        ("%Y-%m-%d", "cam", "cam_2025-03-15"),
+        ("%H%M%S", None, "103045"),
+        ("%Y%m%d", "mydet", "mydet_20250315"),
+    ],
+)
+def test_timestamp_filename_provider(timestamp_format, datakey_name, expected):
+    fp = TimestampFilenameProvider(timestamp_format=timestamp_format)
+    with patch("nslsii.ophyd_async.providers.datetime") as mock_dt:
+        mock_dt.now.return_value = FIXED_NOW
+        assert fp(datakey_name=datakey_name) == expected
+
+
+@pytest.mark.parametrize(
+    ("format_string", "timestamp_format", "metadata", "datakey_name", "expected"),
+    [
+        (
+            "{scan_id:06}",
+            "%Y%m%d_%H%M%S",
+            {"scan_id": 5},
+            None,
+            "20250315_103045_000005",
+        ),
+        (
+            "{scan_id:06}",
+            "%Y%m%d_%H%M%S",
+            {"scan_id": 42},
+            "det1",
+            "det1_20250315_103045_000042",
+        ),
+        (
+            "{sample}",
+            "%Y%m%d",
+            {"sample": "nickel"},
+            None,
+            "20250315_nickel",
+        ),
+        (
+            "{sample}_{scan_id}",
+            "%H%M%S",
+            {"sample": "gold", "scan_id": 7},
+            "cam",
+            "cam_103045_gold_7",
+        ),
+    ],
+)
+def test_re_metadata_filename_provider(format_string, timestamp_format, metadata, datakey_name, expected):
+    fp = REMetadataFilenameProvider(
+        format_string=format_string,
+        timestamp_format=timestamp_format,
+        metadata_dict=metadata,
+    )
+    assert fp.format_string == format_string
+    with patch("nslsii.ophyd_async.providers.datetime") as mock_dt:
+        mock_dt.now.return_value = FIXED_NOW
+        assert fp(datakey_name=datakey_name) == expected

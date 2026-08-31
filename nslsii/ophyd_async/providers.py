@@ -1,5 +1,5 @@
 from collections.abc import MutableMapping
-from datetime import date
+from datetime import date, datetime
 from enum import Enum
 from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 
@@ -138,6 +138,9 @@ class TimestampFilenameProvider(FilenameProvider):
         Whether to include the datakey name in the filename. If True, the datakey name will be prefixed to the filename.
     """
 
+    def __init__(self, timestamp_format: str = "%Y%m%d_%H%M%S"):
+        self._timestamp_format = timestamp_format
+
     def __call__(self, datakey_name: str | None = None) -> str:
         """Generates a filename based on the current timestamp and optionally the datakey name.
 
@@ -152,7 +155,7 @@ class TimestampFilenameProvider(FilenameProvider):
             The generated filename.
         """
 
-        timestamp = date.today().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now().strftime(self._timestamp_format)
         if datakey_name is not None:
             return f"{datakey_name}_{timestamp}"
         return timestamp
@@ -169,9 +172,10 @@ class REMetadataFilenameProvider(TimestampFilenameProvider):
         Whether to include the datakey name in the filename. If True, the datakey name will be prefixed to the filename.
     """
 
-    def __init__(self, format_string: str, metadata_dict: RunEngineMetadata):
+    def __init__(self, format_string: str, timestamp_format: str, metadata_dict: RunEngineMetadata):
         self._format_string = format_string
         self._metadata_dict = metadata_dict
+        super().__init__(timestamp_format=timestamp_format)
 
     @property
     def format_string(self) -> str:
@@ -244,8 +248,6 @@ class NSLS2PathProvider(PathProvider):
         self._granularity = granularity
         self._base_read_directory = (
             self.get_beamline_proposals_dir(beamline_tla=beamline_tla, beamline_tla_suffix=beamline_tla_suffix)
-            if not windows_drive_letter
-            else PureWindowsPath(f"{windows_drive_letter}:\\proposals")
         )
         self._base_write_directory = (
             self._base_read_directory
