@@ -1,5 +1,6 @@
 from datetime import datetime
 from enum import Enum
+from pathlib import PurePosixPath, PureWindowsPath
 from unittest.mock import patch
 import pytest
 import os
@@ -42,14 +43,19 @@ def dummy_re_md_dict():
         "tla_override",
         "with_suffix",
         "include_scan_id_dir",
+        "windows_drive_letter",
     ),
     [
-        (YMDGranularity.none, "_", None, True, False),
-        (YMDGranularity.year, os.path.sep, None, False, False),
-        (YMDGranularity.month, "_", "not-tst", False, False),
-        (YMDGranularity.day, os.path.sep, None, False, False),
-        (YMDGranularity.day, "_", None, True, False),
-        (YMDGranularity.day, os.path.sep, "not-tst", True, False),
+        (YMDGranularity.none, "_", None, True, False, None),
+        (YMDGranularity.year, os.path.sep, None, False, False, None),
+        (YMDGranularity.month, "_", "not-tst", False, False, None),
+        (YMDGranularity.day, os.path.sep, None, False, False, None),
+        (YMDGranularity.day, "_", None, True, False, None),
+        (YMDGranularity.day, os.path.sep, "not-tst", True, False, None),
+        (YMDGranularity.none, "_", None, False, False, "Z"),
+        (YMDGranularity.day, "\\", None, False, False, "X"),
+        (YMDGranularity.day, "\\", None, False, True, "Y"),
+        (YMDGranularity.month, "_", "not-tst", True, False, "W"),
     ],
 )
 def test_nsls2_path_provider(
@@ -60,6 +66,7 @@ def test_nsls2_path_provider(
     dummy_re_md_dict,
     static_fp: StaticFilenameProvider,
     include_scan_id_dir: bool,
+    windows_drive_letter: str | None,
 ):
     os.environ["BEAMLINE_ACRONYM"] = "tst"
 
@@ -71,6 +78,7 @@ def test_nsls2_path_provider(
         granularity=ymd_granularity,
         separator=ymd_separator,
         include_scan_id_dir=include_scan_id_dir,
+        windows_drive_letter=windows_drive_letter,
     )
 
     today = datetime.today()
@@ -82,8 +90,19 @@ def test_nsls2_path_provider(
     info = pp("test")
     dirpath = str(info.directory_path)
 
-    assert dirpath.startswith(
-        f"/nsls2/data/{'tst' if not tla_override else tla_override}{'-new' if with_suffix else ''}/proposals/2024-3/pass-000000/assets/test"
+    tla = tla_override or "tst"
+    tla_full = f"{tla}{'-new' if with_suffix else ''}"
+
+    if windows_drive_letter:
+        assert isinstance(info.directory_path, PureWindowsPath)
+        assert dirpath.startswith(f"{windows_drive_letter}:\\proposals\\2024-3\\pass-000000\\assets\\test")
+    else:
+        assert isinstance(info.directory_path, PurePosixPath)
+        assert dirpath.startswith(f"/nsls2/data/{tla_full}/proposals/2024-3/pass-000000/assets/test")
+
+    # Read URI always uses POSIX paths
+    assert info.directory_uri.startswith(
+        f"file://localhost/nsls2/data/{tla_full}/proposals/2024-3/pass-000000/assets/test"
     )
 
     if ymd_granularity == YMDGranularity.none:
@@ -99,10 +118,11 @@ def test_nsls2_path_provider(
         assert info.create_dir_depth == -3
         assert dirpath.endswith(str(f"{today.year}{ymd_separator}{today.month:02}{ymd_separator}{today.day:02}"))
     elif ymd_granularity == YMDGranularity.day and include_scan_id_dir:
+        dir_sep = "\\" if windows_drive_letter else os.path.sep
         assert info.create_dir_depth == -4
         assert dirpath.endswith(
             str(
-                f"{today.year}{ymd_separator}{today.month:02}{ymd_separator}{today.day:02}{os.path.sep}scan_000005"
+                f"{today.year}{ymd_separator}{today.month:02}{ymd_separator}{today.day:02}{dir_sep}scan_000005"
             )
         )
 
