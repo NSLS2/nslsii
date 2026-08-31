@@ -6,10 +6,8 @@ import re
 import redis
 
 from datetime import datetime
-from getpass import getpass
-from pydantic.types import SecretStr
 from redis_json_dict import RedisJSONDict
-from tiled.client.context import Context, password_grant, identity_provider_input
+from tiled.client.context import Context, device_code_grant, identity_provider_input
 from tiled.profiles import load_profiles
 
 
@@ -93,13 +91,15 @@ def sync_experiment(
         decode_responses=True,
     )
 
-    username, password, duo_append = prompt_for_login(
-        facility, beamline, endstation, proposal_ids
+    print(f"\nWelcome to the {beamline.upper()} beamline at {facility.upper()}!\n")
+    if endstation:
+        print(f"This is the {endstation.upper()} endstation.\n")
+    print(
+        f"Attempting to sync experiment for proposal ID(s) {(', ').join(proposal_ids)}.\n"
     )
+    print("Please login to Tiled with your BNL credentials.")
 
-    tiled_context = create_tiled_context(
-        normalized_beamline, endstation, username, password, duo_append
-    )
+    tiled_context, username = create_tiled_context(normalized_beamline, endstation)
 
     data_sessions = {"pass-" + proposal_id for proposal_id in proposal_ids}
     if not proposals_can_be_authorized(username, facility, beamline, data_sessions):
@@ -118,7 +118,7 @@ def sync_experiment(
     api_key_active = get_api_key(apikey_redis_client, normalized_beamline, endstation)
     if api_key_active:
         set_api_key(apikey_redis_client, normalized_beamline, endstation, "")
-        tiled_context_revoke = create_tiled_context(
+        tiled_context_revoke, username = create_tiled_context(
             normalized_beamline, endstation, api_key=api_key_active
         )
         try:
@@ -246,7 +246,7 @@ def unsync_experiment(
     api_key_active = get_api_key(apikey_redis_client, normalized_beamline, endstation)
     if api_key_active:
         set_api_key(apikey_redis_client, normalized_beamline, endstation, "")
-        tiled_context_revoke = create_tiled_context(
+        tiled_context_revoke, username = create_tiled_context(
             normalized_beamline, endstation, api_key=api_key_active
         )
         try:
@@ -395,22 +395,8 @@ def switch_proposal(
     return md
 
 
-def prompt_for_login(facility, beamline, endstation, proposal_ids):
-    print(f"\nWelcome to the {beamline.upper()} beamline at {facility.upper()}!\n")
-    if endstation:
-        print(f"This is the {endstation.upper()} endstation.\n")
-    print(
-        f"Attempting to sync experiment for proposal ID(s) {(', ').join(proposal_ids)}.\n"
-    )
-    print("Please login with your BNL credentials (you may receive a Duo prompt):")
-    username = input("Username: ")
-    password = SecretStr(getpass(prompt="Password: "))
-    duo_append = input("Duo Passcode or Method (press Enter to ignore): ")
-    return username, password, duo_append
-
-
 def create_tiled_context(
-    beamline, endstation, username=None, password=None, duo_append=None, api_key=None
+    beamline, endstation, api_key=None
 ):
     """
     Create a new Tiled context and authenticate.
@@ -438,12 +424,6 @@ def create_tiled_context(
     if api_key:
         return context
 
-    if not username or not password:
-        raise ValueError(
-            "Please provide a username and password, "
-            "or an API key, to authenticate the Tiled context"
-        )
-
     providers = context.server_info.authentication.providers
     http_client = context.http_client
     if len(providers) == 1:
@@ -458,24 +438,14 @@ def create_tiled_context(
     oauth2_spec = True if client_id and token_endpoint else False
     mode = spec.mode
 
-    if mode != "internal":
-        raise ValueError(
-            "Selected provider is not mode 'internal', and "
-            "sync-experiment only supports password auth currently."
-            "Please select a provider with mode='internal'."
-        )
-
-    if duo_append:
-        password = SecretStr(f"{password.get_secret_value()},{duo_append}")
-    try:
-        tokens = password_grant(
-            http_client, auth_endpoint, provider, username, password.get_secret_value()
-        )
-    except httpx.HTTPStatusError as err:
-        if err.response.status_code == httpx.codes.UNAUTHORIZED:
-            raise ValueError("Username or password not recognized.") from err
-        else:
-            raise
+    # Display link and access code, and try to open web browser.
+    # Block while polling the server awaiting confirmation of authorization.
+    scopes = " ".join(
+        sorted({"openid", "offline_access"} | set(spec.extra_scopes or []))
+    )
+    tokens = device_code_grant(
+        http_client, auth_endpoint, client_id, token_endpoint, scopes,
+    )
 
     confirmation_message = spec.confirmation_message
     if confirmation_message:
@@ -484,7 +454,12 @@ def create_tiled_context(
 
     context.configure_auth(tokens, remember_me=False)
 
-    return context
+    for identity in context.whoami()["identities"]:
+        if identity["provider"] == provider:
+            username = identity["id"]
+            break
+
+    return context, username
 
 
 def create_api_key(tiled_context, data_sessions, beamline):
