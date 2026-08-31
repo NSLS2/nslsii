@@ -2,6 +2,7 @@ from collections.abc import MutableMapping
 from datetime import date
 from enum import Enum
 from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
+
 # TODO: Use RunEngineMetadata from bluesky.run_engine when it is available in released version
 # from bluesky.run_engine import RunEngineMetadata
 from typing import Any, Generic, Optional, cast, Callable
