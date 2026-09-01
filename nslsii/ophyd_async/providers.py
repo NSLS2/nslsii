@@ -134,8 +134,8 @@ class TimestampFilenameProvider(FilenameProvider):
 
     Parameters
     ----------
-    include_datakey_name : bool, default False
-        Whether to include the datakey name in the filename. If True, the datakey name will be prefixed to the filename.
+    timestamp_format : str, default "%Y%m%d_%H%M%S"
+        Format string passed to `datetime.now().strftime()`.
     """
 
     def __init__(self, timestamp_format: str = "%Y%m%d_%H%M%S"):
