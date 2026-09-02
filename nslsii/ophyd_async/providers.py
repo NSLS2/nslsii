@@ -208,7 +208,7 @@ class NSLS2PathProvider(PathProvider):
             if not windows_drive_letter
             else _drive_letter_to_path(windows_drive_letter) / "proposals"
         )
-        self._ymd_separator = separator or "\\" if windows_drive_letter else os.path.sep
+        self._ymd_separator = separator or ("\\" if windows_drive_letter else os.path.sep)
         self._include_scan_id_dir = include_scan_id_dir
 
     @property
