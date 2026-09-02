@@ -1,6 +1,5 @@
 from .providers import (
     YMDGranularity,
-    AcqModeFilenameProvider,
     TimestampFilenameProvider,
     REMetadataFilenameProvider,
     NSLS2PathProvider,
@@ -8,7 +7,6 @@ from .providers import (
 
 __all__ = [
     "YMDGranularity",
-    "AcqModeFilenameProvider",
     "TimestampFilenameProvider",
     "REMetadataFilenameProvider",
     "NSLS2PathProvider",

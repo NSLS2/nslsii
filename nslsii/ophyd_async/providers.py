@@ -1,11 +1,11 @@
 from collections.abc import MutableMapping
 from datetime import date, datetime
 from enum import Enum
-from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
+from pathlib import PurePath, PurePosixPath, PureWindowsPath
 
 # TODO: Use RunEngineMetadata from bluesky.run_engine when it is available in released version
 # from bluesky.run_engine import RunEngineMetadata
-from typing import Any, Generic, Optional, cast, Callable
+from typing import Any
 from urllib.parse import urlunparse
 from ophyd_async.core import (
     FilenameProvider,
@@ -13,11 +13,7 @@ from ophyd_async.core import (
     PathInfo,
     UUIDFilenameProvider,
 )
-import uuid
 import os
-from typing import TypeVar
-
-RunEngineMetadata = MutableMapping[str, Any]
 
 
 class YMDGranularity(int, Enum):
@@ -39,94 +35,6 @@ class YMDGranularity(int, Enum):
     year = 1
     month = 2
     day = 3
-
-
-AcqModeT = TypeVar("AcqModeT", bound=Enum)
-
-
-class AcqModeFilenameProvider(UUIDFilenameProvider, Generic[AcqModeT]):
-    """Filename provider that includes acquisition mode in the filename.
-
-    Parameters
-    ----------
-    mode_type : type[AcqModeT]
-        The type of the acquisition mode. Must be a string enum.
-    initial_mode : AcqModeT, optional
-        The initial acquisition mode. If not provided, the first option in the mode_type enum will be used.
-    include_datakey_name : bool, default False
-        Whether to include the datakey name in the filename. If True, the datakey name will be prefixed to the filename.
-    uuid_call_func : Callable, default uuid.uuid4
-        The function to call to generate the UUID portion of the filename. Defaults to uuid.uuid4.
-    uuid_call_args : list, optional
-        The arguments to pass to the uuid_call_func when generating the UUID. Defaults to None.
-    """
-
-    def __init__(
-        self,
-        mode_type: type[AcqModeT],
-        initial_mode: Optional[AcqModeT] = None,
-        include_datakey_name: bool = False,
-        uuid_call_func: Callable = uuid.uuid4,
-        uuid_call_args: Optional[list] = None,
-    ):
-        if not isinstance(mode_type, type) or not issubclass(mode_type, Enum):
-            raise TypeError("Acquisition mode type must be a subclass of Enum!")
-
-        if len(mode_type) == 0:
-            raise ValueError("Acquisition mode enum must have at least one option!")
-
-        if initial_mode is not None and not isinstance(initial_mode, mode_type):
-            raise ValueError(f"Initial acquisition mode {initial_mode} is not a valid option for {mode_type}!")
-
-        self._mode = initial_mode
-        if initial_mode is None:
-            self._mode = list(mode_type)[0]
-        else:
-            self._mode = initial_mode
-
-        self._mode_type = mode_type
-        self._include_datakey_name = include_datakey_name
-        super().__init__(uuid_call_func=uuid_call_func, uuid_call_args=uuid_call_args)
-
-    def switch_mode(self, new_mode: AcqModeT):
-        """Switches the acquisition mode to a new mode.
-
-        Parameters
-        ----------
-        new_mode : AcqModeT
-            The new acquisition mode to switch to. Must be a member of the mode_type enum provided at initialization.
-
-        Raises
-        ------
-        ValueError
-            If the new_mode is not a valid option for the mode_type enum.
-        """
-
-        if not isinstance(new_mode, self._mode_type):
-            raise ValueError(f"{new_mode} is not a valid option for {self._mode_type}!")
-        self._mode = new_mode
-
-    def __call__(self, datakey_name: Optional[str] = None) -> str:
-        """Generates a filename that includes the current acquisition mode and optionally the datakey name.
-
-        Parameters
-        ----------
-        datakey_name : str, optional
-            The name of the datakey to include in the filename. Only used if include_datakey_name is True.
-
-        Returns
-        -------
-        str
-            The generated filename.
-
-        """
-
-        filename = super().__call__(datakey_name=cast(AcqModeT, self._mode).value)
-        if self._mode is not None:
-            filename = f"{self._mode.value}_{filename}"
-        if self._include_datakey_name and datakey_name is not None:
-            filename = f"{datakey_name}_{filename}"
-        return filename
 
 
 class TimestampFilenameProvider(FilenameProvider):
@@ -166,15 +74,34 @@ class REMetadataFilenameProvider(TimestampFilenameProvider):
 
     Parameters
     ----------
+    format_string : str
+        Format string used to generate the filename. The format string can include placeholders for keys in the metadata dictionary.
+    timestamp_format : str
+        Format string passed to `datetime.now().strftime()`.
     metadata_dict : dict
         Typically `RE.md`. Used for dynamic save path generation from sync-d experiment
-    include_datakey_name : bool, default False
-        Whether to include the datakey name in the filename. If True, the datakey name will be prefixed to the filename.
+    separator : str, default "_"
+        Separator to use between the datakey name, formatted metadata, and timestamp in the filename.
+    include_timestamp : bool, default True
+        Whether to include the timestamp in the filename. If False, only the datakey name and formatted metadata will be included.
+    prepend_datakey_name : bool, default True
+        Whether to prepend the datakey name to the filename. If False, only the formatted metadata and timestamp will be included.
     """
 
-    def __init__(self, format_string: str, timestamp_format: str, metadata_dict: RunEngineMetadata):
+    def __init__(
+        self,
+        format_string: str,
+        timestamp_format: str,
+        metadata_dict: MutableMapping[str, Any],
+        separator: str = "_",
+        include_timestamp: bool = True,
+        prepend_datakey_name: bool = True,
+    ):
         self._format_string = format_string
         self._metadata_dict = metadata_dict
+        self._separator = separator
+        self._include_timestamp = include_timestamp
+        self._prepend_datakey_name = prepend_datakey_name
         super().__init__(timestamp_format=timestamp_format)
 
     @property
@@ -197,8 +124,38 @@ class REMetadataFilenameProvider(TimestampFilenameProvider):
             The generated filename.
         """
 
-        base_filename = super().__call__(datakey_name=datakey_name)
-        return base_filename + "_" + self._format_string.format(**self._metadata_dict)
+        parts = [self._format_string.format(**self._metadata_dict)]
+        if datakey_name is not None and self._prepend_datakey_name:
+            parts.insert(0, datakey_name)
+        if self._include_timestamp:
+            parts.append(super().__call__())
+        return self._separator.join(parts)
+
+
+def _drive_letter_to_path(drive_letter: str) -> PureWindowsPath:
+    """Normalizes a drive letter to uppercase and ensures it ends with a colon.
+
+    Parameters
+    ----------
+    drive_letter : str
+        The drive letter to normalize.
+
+    Returns
+    -------
+    PureWindowsPath
+        The normalized drive letter, as a PureWindowsPath object.
+    """
+
+    # If more than one character is provided and the second character is a colon,
+    # take only the first character
+    if len(drive_letter) > 1 and drive_letter[1] == ":":
+        drive_letter = drive_letter[0]
+
+    # Drive letter at this point must be a single character, and it must be an alphabetic character
+    if len(drive_letter) != 1 or not drive_letter.isalpha():
+        raise ValueError("Drive letter must be a single alphabetic character.")
+
+    return PureWindowsPath(f"{drive_letter.upper()}:\\")
 
 
 class NSLS2PathProvider(PathProvider):
@@ -213,18 +170,17 @@ class NSLS2PathProvider(PathProvider):
 
     Parameters
     ----------
-    metadata_dict : dict
+    metadata_dict : MutableMapping[str, Any]
         Typically `RE.md`. Used for dynamic save path generation from sync-d experiment
     filename_provider : FilenameProvider, default UUIDFilenameProvider()
-        Filename provider to use for generating filenames.
-    beamline_tla : str, optional
-        TLA of the beamline to use in the path. If not provided, the TLA will be determined from
-        the ENDSTATION_ACRONYM or BEAMLINE_ACRONYM environment variables.
-    beamline_tla_suffix : str, optional
-        Suffix to add to TLA when generating path.
-    separator : str, default os.path.sep
-        Separator to use in YMD portion of the path. Defaults to os.path.sep. Should be set to `\\` for Windows paths.
-    granularity : YMDGranularity, default YMDGranularity.day
+        Filename provider to use for generating filenames. Defaults to UUIDs.
+    beamline_data_dirname : str, optional
+        Name of the beamline data directory to use in the path, typically lowercase beamline TLA.
+        If not provided, the name will be determined from the ENDSTATION_ACRONYM or
+        BEAMLINE_ACRONYM environment variables.
+    separator : str, optional
+        Separator to use in YMD portion of the path. Defaults to default path separator given write directory semantics.
+    granularity : YMDGranularity | str, default YMDGranularity.day
         Granularity of the YMD portion of the path. If set to YMDGranularity.day, the path will include year, month,
         and day directories. If set to YMDGranularity.month, the path will include year and month directories.
         If set to YMDGranularity.year, the path will include only the year directory.
@@ -234,27 +190,25 @@ class NSLS2PathProvider(PathProvider):
 
     def __init__(
         self,
-        metadata_dict: RunEngineMetadata,
+        metadata_dict: MutableMapping[str, Any],
         filename_provider: FilenameProvider = UUIDFilenameProvider(),
-        granularity: YMDGranularity = YMDGranularity.day,
+        granularity: YMDGranularity | str = YMDGranularity.day,
         windows_drive_letter: str | None = None,
-        separator=os.path.sep,
-        beamline_tla: str | None = None,
-        beamline_tla_suffix: str | None = None,
+        separator: str | None = None,
+        beamline_data_dirname: str | None = None,
         include_scan_id_dir: bool = False,
     ):
+
         self._filename_provider = filename_provider
         self._metadata_dict = metadata_dict
-        self._granularity = granularity
-        self._base_read_directory = (
-            self.get_beamline_proposals_dir(beamline_tla=beamline_tla, beamline_tla_suffix=beamline_tla_suffix)
-        )
+        self._granularity = granularity if isinstance(granularity, YMDGranularity) else YMDGranularity[granularity]
+        self._base_read_directory = self._get_beamline_proposals_dir(beamline_data_dirname=beamline_data_dirname)
         self._base_write_directory = (
             self._base_read_directory
             if not windows_drive_letter
-            else PureWindowsPath(f"{windows_drive_letter}:\\proposals")
+            else _drive_letter_to_path(windows_drive_letter) / "proposals"
         )
-        self._ymd_separator = separator
+        self._ymd_separator = separator or "\\" if windows_drive_letter else os.path.sep
         self._include_scan_id_dir = include_scan_id_dir
 
     @property
@@ -263,22 +217,20 @@ class NSLS2PathProvider(PathProvider):
 
         return self._filename_provider
 
-    def get_beamline_proposals_dir(
-        self, beamline_tla: str | None = None, beamline_tla_suffix: str | None = None
-    ) -> PurePosixPath:
+    def _get_beamline_proposals_dir(self, beamline_data_dirname: str | None = None) -> PurePosixPath:
         """
         Function that computes path to the proposals directory based on TLA env vars
         """
 
-        beamline_tla = beamline_tla or os.getenv("ENDSTATION_ACRONYM", os.getenv("BEAMLINE_ACRONYM", "")).lower()
-        if beamline_tla_suffix:
-            beamline_tla += beamline_tla_suffix
+        beamline_data_dirname = (
+            beamline_data_dirname or os.getenv("ENDSTATION_ACRONYM", os.getenv("BEAMLINE_ACRONYM", "")).lower()
+        )
 
-        beamline_proposals_dir = PurePosixPath(f"/nsls2/data/{beamline_tla}/proposals/")
+        beamline_proposals_dir = PurePosixPath(f"/nsls2/data/{beamline_data_dirname}/proposals/")
 
         return beamline_proposals_dir
 
-    def generate_directory_path(self, base_path: PurePath, datakey_name: str | None = None) -> PurePath:
+    def _generate_directory_path(self, base_path: PurePath, datakey_name: str) -> PurePath:
         """Helper function that generates ymd path structure.
 
         Depending on the granularity, the path will include year, month, and day directories.
@@ -291,7 +243,6 @@ class NSLS2PathProvider(PathProvider):
             The base path to which the YMD portion of the path will be appended.
         datakey_name : str
             The name of the datakey to include in the path.
-            If provided, the datakey name will be used as a prefix to the YMD portion of the path.
 
         Returns
         -------
@@ -306,6 +257,7 @@ class NSLS2PathProvider(PathProvider):
 
         path_semantics = type(base_path)
 
+        # Given requested granularity, construct the current date template string to be used in the path.
         if self._granularity >= YMDGranularity.day:
             current_date_template = f"%Y{self._ymd_separator}%m{self._ymd_separator}%d"
         elif self._granularity == YMDGranularity.month:
@@ -315,15 +267,7 @@ class NSLS2PathProvider(PathProvider):
         elif self._granularity == YMDGranularity.none:
             current_date_template = ""
 
-        current_date = path_semantics(date.today().strftime(current_date_template))
-
-        if datakey_name is None:
-            ymd_dir_path = current_date
-        else:
-            ymd_dir_path = path_semantics(datakey_name) / current_date
-
-        if "cycle" not in self._metadata_dict or "data_session" not in self._metadata_dict:
-            raise KeyError("Metadata dictionary must contain 'cycle' and 'data_session' keys!")
+        ymd_dir_path = path_semantics(datakey_name) / date.today().strftime(current_date_template)
 
         directory_path = (
             base_path
@@ -351,8 +295,12 @@ class NSLS2PathProvider(PathProvider):
         PathInfo
             The generated PathInfo object.
         """
-        full_write_path = self.generate_directory_path(self._base_write_directory, datakey_name=datakey_name)
-        full_read_path = self.generate_directory_path(self._base_read_directory, datakey_name=datakey_name)
+
+        if "cycle" not in self._metadata_dict or "data_session" not in self._metadata_dict:
+            raise KeyError("Metadata dictionary must contain 'cycle' and 'data_session' keys!")
+
+        full_write_path = self._generate_directory_path(self._base_write_directory, datakey_name=datakey_name)
+        full_read_path = self._generate_directory_path(self._base_read_directory, datakey_name=datakey_name)
 
         return PathInfo(
             directory_path=full_write_path,
@@ -363,7 +311,7 @@ class NSLS2PathProvider(PathProvider):
                     f"{full_read_path.as_posix()}/",
                     "",
                     "",
-                    None,
+                    "",
                 )
             ),
             filename=self._filename_provider(),
