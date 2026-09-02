@@ -132,32 +132,6 @@ class REMetadataFilenameProvider(TimestampFilenameProvider):
         return self._separator.join(parts)
 
 
-def _drive_letter_to_path(drive_letter: str) -> PureWindowsPath:
-    """Normalizes a drive letter to uppercase and ensures it ends with a colon.
-
-    Parameters
-    ----------
-    drive_letter : str
-        The drive letter to normalize.
-
-    Returns
-    -------
-    PureWindowsPath
-        The normalized drive letter, as a PureWindowsPath object.
-    """
-
-    # If more than one character is provided and the second character is a colon,
-    # take only the first character
-    if len(drive_letter) > 1 and drive_letter[1] == ":":
-        drive_letter = drive_letter[0]
-
-    # Drive letter at this point must be a single character, and it must be an alphabetic character
-    if len(drive_letter) != 1 or not drive_letter.isalpha():
-        raise ValueError("Drive letter must be a single alphabetic character.")
-
-    return PureWindowsPath(f"{drive_letter.upper()}:\\")
-
-
 class NSLS2PathProvider(PathProvider):
     """Default NSLS2 path provider.
 
@@ -174,10 +148,14 @@ class NSLS2PathProvider(PathProvider):
         Typically `RE.md`. Used for dynamic save path generation from sync-d experiment
     filename_provider : FilenameProvider, default UUIDFilenameProvider()
         Filename provider to use for generating filenames. Defaults to UUIDs.
-    beamline_data_dirname : str, optional
-        Name of the beamline data directory to use in the path, typically lowercase beamline TLA.
-        If not provided, the name will be determined from the ENDSTATION_ACRONYM or
-        BEAMLINE_ACRONYM environment variables.
+    base_data_dir : PurePosixPath | None, optional
+        Base beamline data directory. Typically /nsls2/data/<tla>/proposals.
+        If not provided, the base data directory will be determined from
+        the ENDSTATION_ACRONYM or BEAMLINE_ACRONYM environment variables.
+    base_write_dir : PurePath | None, optional
+        Base directory for DAQ file write operations. Typically only used for cases where the
+        file-writing detector IOC runs on a windows host.
+        If not provided, the base write directory will be the same as the base data directory.
     separator : str, optional
         Separator to use in YMD portion of the path. Defaults to default path separator given write directory semantics.
     granularity : YMDGranularity | str, default YMDGranularity.day
@@ -191,24 +169,35 @@ class NSLS2PathProvider(PathProvider):
     def __init__(
         self,
         metadata_dict: MutableMapping[str, Any],
+        base_data_dir: PurePosixPath | None = None,
+        base_write_dir: PurePath | None = None,
         filename_provider: FilenameProvider = UUIDFilenameProvider(),
         granularity: YMDGranularity | str = YMDGranularity.day,
-        windows_drive_letter: str | None = None,
         separator: str | None = None,
-        beamline_data_dirname: str | None = None,
         include_scan_id_dir: bool = False,
     ):
 
         self._filename_provider = filename_provider
         self._metadata_dict = metadata_dict
         self._granularity = granularity if isinstance(granularity, YMDGranularity) else YMDGranularity[granularity]
-        self._base_read_directory = self._get_beamline_proposals_dir(beamline_data_dirname=beamline_data_dirname)
-        self._base_write_directory = (
-            self._base_read_directory
-            if not windows_drive_letter
-            else _drive_letter_to_path(windows_drive_letter) / "proposals"
-        )
-        self._ymd_separator = separator or "\\" if windows_drive_letter else os.path.sep
+
+        # Determine the base directory for read (and potentially write) operations.
+        # If not specified, automatically determine the base directory from the
+        # ENDSTATION_ACRONYM or BEAMLINE_ACRONYM environment variables.
+        if not base_data_dir:
+            tla = os.getenv("ENDSTATION_ACRONYM", os.getenv("BEAMLINE_ACRONYM", "")).lower()
+            if not tla:
+                raise ValueError(
+                    "Neither ENDSTATION_ACRONYM nor BEAMLINE_ACRONYM environment variables are set. "
+                    "Please set one of these environment variables or provide a base_data_dir."
+                )
+            self._base_data_dir = PurePosixPath(f"/nsls2/data/{tla}/proposals")
+        else:
+            self._base_data_dir = base_data_dir
+
+        self._base_write_dir = self._base_data_dir if not base_write_dir else base_write_dir
+
+        self._ymd_separator = separator or ("\\" if isinstance(self._base_write_dir, PureWindowsPath) else "/")
         self._include_scan_id_dir = include_scan_id_dir
 
     @property
@@ -216,19 +205,6 @@ class NSLS2PathProvider(PathProvider):
         """Returns the filename provider used by this path provider."""
 
         return self._filename_provider
-
-    def _get_beamline_proposals_dir(self, beamline_data_dirname: str | None = None) -> PurePosixPath:
-        """
-        Function that computes path to the proposals directory based on TLA env vars
-        """
-
-        beamline_data_dirname = (
-            beamline_data_dirname or os.getenv("ENDSTATION_ACRONYM", os.getenv("BEAMLINE_ACRONYM", "")).lower()
-        )
-
-        beamline_proposals_dir = PurePosixPath(f"/nsls2/data/{beamline_data_dirname}/proposals/")
-
-        return beamline_proposals_dir
 
     def _generate_directory_path(self, base_path: PurePath, datakey_name: str) -> PurePath:
         """Helper function that generates ymd path structure.
@@ -299,8 +275,8 @@ class NSLS2PathProvider(PathProvider):
         if "cycle" not in self._metadata_dict or "data_session" not in self._metadata_dict:
             raise KeyError("Metadata dictionary must contain 'cycle' and 'data_session' keys!")
 
-        full_write_path = self._generate_directory_path(self._base_write_directory, datakey_name=datakey_name)
-        full_read_path = self._generate_directory_path(self._base_read_directory, datakey_name=datakey_name)
+        full_write_path = self._generate_directory_path(self._base_write_dir, datakey_name=datakey_name)
+        full_read_path = self._generate_directory_path(self._base_data_dir, datakey_name=datakey_name)
 
         return PathInfo(
             directory_path=full_write_path,

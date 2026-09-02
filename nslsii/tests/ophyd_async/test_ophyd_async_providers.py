@@ -1,5 +1,5 @@
 from datetime import datetime
-from pathlib import PurePosixPath, PureWindowsPath
+from pathlib import PurePath, PurePosixPath, PureWindowsPath
 from unittest.mock import patch
 import pytest
 import os
@@ -11,7 +11,6 @@ from nslsii.ophyd_async import (
     REMetadataFilenameProvider,
     NSLS2PathProvider,
 )
-from nslsii.ophyd_async.providers import _drive_letter_to_path
 
 
 @pytest.fixture
@@ -30,75 +29,51 @@ def dummy_re_md_dict():
 
 
 @pytest.mark.parametrize(
-    ("drive_letter", "expected"),
-    [
-        ("C", PureWindowsPath("C:\\")),
-        ("c", PureWindowsPath("C:\\")),
-        ("Z", PureWindowsPath("Z:\\")),
-        ("D:", PureWindowsPath("D:\\")),
-        ("d:", PureWindowsPath("D:\\")),
-        ("E:\\", PureWindowsPath("E:\\")),
-    ],
-)
-def test_drive_letter_to_path(drive_letter: str, expected: PureWindowsPath):
-    assert _drive_letter_to_path(drive_letter) == expected
-
-
-@pytest.mark.parametrize(
-    "drive_letter",
-    [
-        "",
-        "1",
-        "CD",
-        "12",
-        ":",
-        "C1",
-    ],
-)
-def test_drive_letter_to_path_invalid(drive_letter: str):
-    with pytest.raises(ValueError, match="single alphabetic character"):
-        _drive_letter_to_path(drive_letter)
-
-
-@pytest.mark.parametrize(
     (
         "ymd_granularity",
         "ymd_separator",
-        "beamline_data_dir",
+        "base_data_dir",
         "include_scan_id_dir",
-        "windows_drive_letter",
+        "base_write_dir",
     ),
     [
         (YMDGranularity.none, None, None, False, None),
         (YMDGranularity.year, None, None, False, None),
-        (YMDGranularity.month, None, "not-tst", False, None),
+        (YMDGranularity.month, None, PurePosixPath("/nsls2/data/not-tst/proposals"), False, None),
         (YMDGranularity.day, None, None, False, None),
-        (YMDGranularity.day, None, "not-tst", True, None),
-        (YMDGranularity.none, None, None, False, "Z"),
-        (YMDGranularity.day, None, None, False, "X:"),
-        ("day", None, None, True, "y"),
-        ("month", "_", "not-tst", False, "W:\\"),
+        (YMDGranularity.day, "_", None, False, None),
+        (YMDGranularity.day, None, PurePosixPath("/nsls2/data/not-tst/proposals"), True, None),
+        (YMDGranularity.none, None, None, False, PureWindowsPath("Z:\\proposals")),
+        (YMDGranularity.day, None, None, False, PureWindowsPath("X:\\proposals")),
+        ("day", None, None, True, PureWindowsPath("Y:\\proposals")),
+        (
+            "month",
+            "_",
+            PurePosixPath("/nsls2/data/not-tst/proposals"),
+            False,
+            PureWindowsPath("W:\\proposals"),
+        ),
     ],
 )
 def test_nsls2_path_provider(
     ymd_granularity: YMDGranularity | str,
     ymd_separator: str | None,
-    beamline_data_dir: str | None,
+    base_data_dir: PurePosixPath | None,
     dummy_re_md_dict,
     static_fp: StaticFilenameProvider,
     include_scan_id_dir: bool,
-    windows_drive_letter: str | None,
+    base_write_dir: PurePath | None,
 ):
     os.environ["BEAMLINE_ACRONYM"] = "tst"
 
     pp = NSLS2PathProvider(
         dummy_re_md_dict,
         filename_provider=static_fp,
-        beamline_data_dirname=beamline_data_dir,
+        base_data_dir=base_data_dir,
         granularity=ymd_granularity,
         separator=ymd_separator,
         include_scan_id_dir=include_scan_id_dir,
-        windows_drive_letter=windows_drive_letter,
+        base_write_dir=base_write_dir,
     )
 
     today = datetime.today()
@@ -107,7 +82,9 @@ def test_nsls2_path_provider(
     granularity = (
         ymd_granularity if isinstance(ymd_granularity, YMDGranularity) else YMDGranularity[ymd_granularity]
     )
-    beamline = beamline_data_dir or "tst"
+    # The read dir defaults to the env-derived path; the write dir defaults to the read dir.
+    read_dir = base_data_dir or PurePosixPath("/nsls2/data/tst/proposals")
+    write_dir = base_write_dir or read_dir
 
     # Make sure we have to pass the datakey_name as an argument.
     with pytest.raises(TypeError, match="missing 1 required positional argument: 'datakey_name'"):
@@ -116,21 +93,21 @@ def test_nsls2_path_provider(
     info = pp("test")
     dirpath = str(info.directory_path)
 
-    if windows_drive_letter:
-        # Windows drive letters are normalized to a single uppercase letter.
+    if isinstance(write_dir, PureWindowsPath):
+        # Windows write dirs use a backslash separator unless one is given explicitly.
         effective_sep = ymd_separator or "\\"
-        drive = windows_drive_letter[0].upper()
+        join_sep = "\\"
         assert isinstance(info.directory_path, PureWindowsPath)
-        assert dirpath.startswith(f"{drive}:\\proposals\\2024-3\\pass-000000\\assets\\test")
     else:
-        effective_sep = os.path.sep
+        # POSIX write dirs default to a forward-slash separator.
+        effective_sep = ymd_separator or "/"
+        join_sep = "/"
         assert isinstance(info.directory_path, PurePosixPath)
-        assert dirpath.startswith(f"/nsls2/data/{beamline}/proposals/2024-3/pass-000000/assets/test")
 
-    # Read URI always uses POSIX paths
-    assert info.directory_uri.startswith(
-        f"file://localhost/nsls2/data/{beamline}/proposals/2024-3/pass-000000/assets/test"
-    )
+    assert dirpath.startswith(f"{write_dir}{join_sep}2024-3{join_sep}pass-000000{join_sep}assets{join_sep}test")
+
+    # Read URI is always derived from the POSIX read directory, independent of the write directory.
+    assert info.directory_uri.startswith(f"file://localhost{read_dir.as_posix()}/2024-3/pass-000000/assets/test")
 
     if granularity == YMDGranularity.none:
         assert info.create_dir_depth == 0
@@ -147,8 +124,15 @@ def test_nsls2_path_provider(
     elif granularity == YMDGranularity.day and include_scan_id_dir:
         assert info.create_dir_depth == -4
         assert dirpath.endswith(
-            f"{today.year}{effective_sep}{today.month:02}{effective_sep}{today.day:02}{effective_sep}scan_000005"
+            f"{today.year}{effective_sep}{today.month:02}{effective_sep}{today.day:02}{join_sep}scan_000005"
         )
+
+
+def test_nsls2_path_provider_requires_tla(dummy_re_md_dict, monkeypatch):
+    monkeypatch.delenv("ENDSTATION_ACRONYM", raising=False)
+    monkeypatch.delenv("BEAMLINE_ACRONYM", raising=False)
+    with pytest.raises(ValueError, match="ENDSTATION_ACRONYM"):
+        NSLS2PathProvider(dummy_re_md_dict)
 
 
 FIXED_NOW = datetime(2025, 3, 15, 10, 30, 45)
