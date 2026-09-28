@@ -1,0 +1,576 @@
+from __future__ import annotations
+
+import asyncio
+from dataclasses import dataclass
+
+from collections.abc import Awaitable, Mapping, Sequence
+from typing import Annotated as A
+
+import numpy as np
+
+from event_model import DataKey
+from ophyd_async.core import (
+    Array1D,
+    AsyncStatus,
+    DetectorDataLogic,
+    DetectorTriggerLogic,
+    DeviceVector,
+    PathProvider,
+    SignalDict,
+    SignalR,
+    SignalRW,
+    StreamResourceDataProvider,
+    StreamResourceInfo,
+    StrictEnum,
+    SupersetEnum,
+    TriggerableCommand,
+    TriggerInfo,
+    soft_signal_rw,
+)
+from ophyd_async.epics.adcore import (
+    ADAcquireLogic,
+    ADBaseColorMode,
+    ADBaseDataType,
+    ADBaseIO,
+    ADHDFDataLogic,
+    ADWriterFactory,
+    AreaDetector,
+    NDArrayDescription,
+    NDFileHDF5IO,
+    NDPluginBaseIO,
+)
+from ophyd_async.epics.core import (
+    EpicsDevice,
+    PvSuffix,
+    epics_signal_r,
+    epics_triggerable_command,
+)
+
+
+async def _gather_and_raise(*awaitables: Awaitable[object]) -> None:
+    results = await asyncio.gather(*awaitables, return_exceptions=True)
+    for result in results:
+        if isinstance(result, BaseException):
+            raise result
+
+
+class Xspress3TriggerMode(SupersetEnum):
+    """Trigger modes exposed by the canonical Xspress3 IOC."""
+
+    SOFTWARE = "Software"
+    INTERNAL = "Internal"
+    IDC = "IDC"
+    TTL_VETO_ONLY = "TTL Veto Only"
+    TTL_BOTH = "TTL Both"
+    LVDS_VETO_ONLY = "LVDS Veto Only"
+    LVDS_BOTH = "LVDS Both"
+    SOFTWARE_INTERNAL = "Software + Internal"
+    TTL_INTERNAL = "TTL + Internal"
+
+
+class Xspress3LevelTriggerMode(StrictEnum):
+    """IOC modes valid for externally level-triggered acquisition."""
+
+    TTL_VETO_ONLY = "TTL Veto Only"
+    TTL_BOTH = "TTL Both"
+    LVDS_VETO_ONLY = "LVDS Veto Only"
+    LVDS_BOTH = "LVDS Both"
+
+
+@dataclass
+class Xspress3TriggerLogic(DetectorTriggerLogic):
+    """Configure finite internal, edge, and level-triggered acquisitions."""
+
+    driver: Xspress3DriverIO
+    level_trigger_mode: SignalR[Xspress3LevelTriggerMode]
+    minimum_deadtime: float = 0.0
+
+    def get_deadtime(self, config_values: SignalDict) -> float:
+        return self.minimum_deadtime
+
+    @staticmethod
+    def _require_finite(num: int) -> None:
+        if num == 0:
+            raise ValueError("Xspress3 does not support unbounded acquisition")
+
+    async def _prepare(self, mode: Xspress3TriggerMode, num: int, livetime: float = 0.0) -> None:
+        self._require_finite(num)
+        coros = [
+            self.driver.trigger_mode.set(mode),
+            self.driver.num_images.set(num),
+        ]
+        if livetime:
+            coros.append(self.driver.acquire_time.set(livetime))
+        await asyncio.gather(*coros)
+
+    async def prepare_internal(self, num: int, livetime: float, deadtime: float):
+        if deadtime:
+            raise ValueError("Xspress3 internal triggering does not support deadtime")
+        await self._prepare(Xspress3TriggerMode.INTERNAL, num, livetime)
+
+    async def prepare_edge(self, num: int, livetime: float):
+        await self._prepare(Xspress3TriggerMode.TTL_INTERNAL, num, livetime)
+
+    async def prepare_level(self, num: int):
+        mode = Xspress3TriggerMode((await self.level_trigger_mode.get_value()).value)
+        await self._prepare(mode, num)
+
+
+class Xspress3AcquireLogic(ADAcquireLogic):
+    """Acquire with IOC-managed erase-on-start."""
+
+    async def start_acquiring(self) -> None:
+        await self.driver.erase_on_start.set(True)
+        await super().start_acquiring()
+
+
+class Xspress3DriverIO(ADBaseIO):
+    """Signals provided by ``xspress3.template`` under the driver prefix."""
+
+    trigger_mode: A[SignalRW[Xspress3TriggerMode], PvSuffix.rbv("TriggerMode")]
+    erase: A[TriggerableCommand, PvSuffix("ERASE")]
+    reset: A[TriggerableCommand, PvSuffix("RESET")]
+    erase_on_start: A[SignalRW[bool], PvSuffix("EraseOnStart")]
+    soft_trigger: A[SignalRW[bool], PvSuffix.rbv("SoftTrigger")]
+    array_callbacks: A[SignalRW[bool], PvSuffix.rbv("ArrayCallbacks")]
+    frame_count: A[SignalR[int], PvSuffix("FRAME_COUNT_RBV")]
+    num_channels: A[SignalRW[int], PvSuffix.rbv("NUM_CHANNELS")]
+    max_num_channels: A[SignalR[int], PvSuffix("MAX_NUM_CHANNELS_RBV")]
+    num_frames_config: A[SignalRW[int], PvSuffix.rbv("NUM_FRAMES_CONFIG")]
+    max_frames: A[SignalR[int], PvSuffix("MAX_FRAMES_RBV")]
+    max_frames_driver: A[SignalR[int], PvSuffix("MAX_FRAMES_DRIVER_RBV")]
+    max_spectra: A[SignalRW[int], PvSuffix.rbv("MAX_SPECTRA")]
+    invert_f0: A[SignalRW[int], PvSuffix.rbv("INVERT_F0")]
+    invert_veto: A[SignalRW[int], PvSuffix.rbv("INVERT_VETO")]
+    debounce: A[SignalRW[int], PvSuffix.rbv("DEBOUNCE")]
+    ctrl_dtc: A[SignalRW[bool], PvSuffix.rbv("CTRL_DTC")]
+    run_flags: A[SignalRW[int], PvSuffix.rbv("RUN_FLAGS")]
+    config_path: A[SignalRW[str], PvSuffix.rbv("CONFIG_PATH")]
+    config_save_path: A[SignalRW[str], PvSuffix.rbv("CONFIG_SAVE_PATH")]
+
+
+class Xspress3HDFIO(NDFileHDF5IO):
+    """Canonical HDF plugin plus the Xspress3 NumCapture forward-link switch."""
+
+    num_capture_calc_disable: A[SignalRW[int], PvSuffix("NumCapture_CALC.DISA")]
+
+
+class Xspress3Sca(EpicsDevice):
+    """The eleven scaler values exposed for one Xspress3 channel."""
+
+    clock_ticks: A[SignalR[float], PvSuffix("0:Value_RBV")]
+    reset_ticks: A[SignalR[float], PvSuffix("1:Value_RBV")]
+    reset_counts: A[SignalR[float], PvSuffix("2:Value_RBV")]
+    all_event: A[SignalR[float], PvSuffix("3:Value_RBV")]
+    all_good: A[SignalR[float], PvSuffix("4:Value_RBV")]
+    window_1: A[SignalR[float], PvSuffix("5:Value_RBV")]
+    window_2: A[SignalR[float], PvSuffix("6:Value_RBV")]
+    pileup: A[SignalR[float], PvSuffix("7:Value_RBV")]
+    event_width: A[SignalR[float], PvSuffix("8:Value_RBV")]
+    dt_factor: A[SignalR[float], PvSuffix("9:Value_RBV")]
+    dt_percent: A[SignalR[float], PvSuffix("10:Value_RBV")]
+
+
+class _Xspress3RoiTimeSeriesIO(EpicsDevice):
+    ts_acquiring: A[SignalRW[bool], PvSuffix("TSAcquiring")]
+    ts_read: A[SignalRW[bool], PvSuffix("TSRead")]
+    ts_num_points: A[SignalRW[int], PvSuffix("TSNumPoints")]
+    ts_current_point: A[SignalR[int], PvSuffix("TSCurrentPoint")]
+    ts_control: A[SignalRW[bool], PvSuffix("TSControl")]
+    ts_scan_rate: A[SignalRW[str], PvSuffix("TSRead.SCAN")]
+
+
+class Xspress3McaRoi(EpicsDevice):
+    """One MCA ROI using half-open bin bounds."""
+
+    label: A[SignalRW[str], PvSuffix("Name")]
+    min_x: A[SignalRW[int], PvSuffix.rbv("MinX")]
+    size_x: A[SignalRW[int], PvSuffix.rbv("SizeX")]
+    total: A[SignalR[float], PvSuffix("Total_RBV")]
+    enabled: A[SignalRW[bool], PvSuffix.rbv("Use")]
+    time_series_total: A[SignalR[Array1D[np.float64]], PvSuffix("TSTotal")]
+
+    def __init__(
+        self,
+        prefix: str,
+        *,
+        reset_prefix: str | None = None,
+        name: str = "",
+    ) -> None:
+        super().__init__(prefix, name=name)
+        if reset_prefix is not None:
+            self.reset = epics_triggerable_command(reset_prefix)
+
+    @AsyncStatus.wrap
+    async def set_roi_bins(self, low_bin: int, high_bin: int, *, enabled: bool = True) -> None:
+        """Set this ROI to the half-open bin interval ``[low_bin, high_bin)``."""
+        if type(low_bin) is not int or type(high_bin) is not int:
+            raise TypeError("ROI bin bounds must be integers")
+        if low_bin < 0 or high_bin < 0:
+            raise ValueError("ROI bin bounds must be non-negative")
+        if high_bin <= low_bin:
+            raise ValueError("high_bin must be greater than low_bin")
+
+        await self.enabled.set(False)
+        await self.min_x.set(low_bin)
+        await self.size_x.set(high_bin - low_bin)
+        await self.enabled.set(enabled)
+
+
+class Xspress3Channel(EpicsDevice):
+    """Spectrum, scalers, ROI time series, and ROIs for one channel."""
+
+    def __init__(
+        self,
+        prefix: str,
+        channel_number: int,
+        roi_numbers: Sequence[int],
+        *,
+        include_roi_reset: bool = False,
+        name: str = "",
+    ) -> None:
+        _validate_number(channel_number, "channel", 1, 16)
+        roi_numbers = _validate_numbers(roi_numbers, "ROI", 1, 48)
+        self.channel_number = channel_number
+        self.spectrum = epics_signal_r(Array1D[np.float64], f"{prefix}MCA{channel_number}:ArrayData")
+        self.spectrum_sum = epics_signal_r(Array1D[np.float64], f"{prefix}MCASUM{channel_number}:ArrayData")
+        self.scalers = Xspress3Sca(f"{prefix}C{channel_number}SCA:")
+        self.roi_time_series = _Xspress3RoiTimeSeriesIO(f"{prefix}MCA{channel_number}ROI:")
+        self.rois = DeviceVector(
+            {
+                roi_number: Xspress3McaRoi(
+                    f"{prefix}MCA{channel_number}ROI:{roi_number}:",
+                    reset_prefix=(
+                        f"{prefix}C{channel_number}_ROI{roi_number}:Reset"
+                        if include_roi_reset and roi_number <= 16
+                        else None
+                    ),
+                )
+                for roi_number in roi_numbers
+            }
+        )
+        super().__init__(prefix, name=name)
+
+
+_SPECTRUM_DATASET = "/entry/data/data"
+_NDATTRIBUTES_GROUP = "/entry/instrument/NDAttributes"
+
+
+_SCA_NAMES = (
+    "clock_ticks",
+    "reset_ticks",
+    "reset_counts",
+    "all_event",
+    "all_good",
+    "window_1",
+    "window_2",
+    "pileup",
+    "event_width",
+    "dt_factor",
+    "dt_percent",
+)
+_SCA_DATASETS = (
+    "SCA0",
+    "SCA1",
+    "SCA2",
+    "SCA3",
+    "SCA4",
+    "SCA5",
+    "SCA6",
+    "SCA7",
+    "EventWidth",
+    "DTFactor",
+    "DTPercent",
+)
+
+
+class _Xspress3StreamResourceDataProvider(StreamResourceDataProvider):
+    async def make_datakeys(self, collections_per_event: int) -> dict[str, DataKey]:
+        datakeys = await super().make_datakeys(collections_per_event)
+        for resource in self.resources:
+            if collections_per_event > 1 or resource.shape:
+                datakeys[resource.data_key]["dtype"] = "array"
+        return datakeys
+
+
+class Xspress3HDFDataLogic(DetectorDataLogic):
+    """Expose fixed bulk and per-channel streams plus optional NDAttributes."""
+
+    datakey_suffix = ""
+
+    def __init__(
+        self,
+        array_description: NDArrayDescription,
+        path_provider: PathProvider,
+        writer: Xspress3HDFIO,
+        driver: Xspress3DriverIO,
+        *,
+        channel_numbers: Sequence[int],
+        roi_numbers: Sequence[int],
+        include_roi_streams: bool = False,
+        include_sca_streams: bool = False,
+    ) -> None:
+        self.driver = driver
+        self.channel_numbers = tuple(channel_numbers)
+        self.roi_numbers = tuple(roi_numbers)
+        self.include_roi_streams = include_roi_streams
+        self.include_sca_streams = include_sca_streams
+        self._delegate = ADHDFDataLogic(
+            array_description=array_description,
+            path_provider=path_provider,
+            writer=writer,
+        )
+
+    async def _read_array_metadata(self) -> tuple[tuple[int, int], str]:
+        size_z, size_y, size_x, data_type, color_mode = await asyncio.gather(
+            self.driver.array_size_z.get_value(),
+            self.driver.array_size_y.get_value(),
+            self.driver.array_size_x.get_value(),
+            self.driver.data_type.get_value(),
+            self.driver.color_mode.get_value(),
+        )
+        shape = tuple(size for size in (size_z, size_y, size_x) if size > 0)
+        highest_channel = max(self.channel_numbers, default=0)
+        metadata_error = (
+            len(shape) != 2
+            or shape[0] < highest_channel
+            or data_type is ADBaseDataType.UNDEFINED
+            or color_mode is not ADBaseColorMode.MONO
+        )
+        if metadata_error:
+            raise ValueError(
+                "Xspress3 array metadata must describe a nonempty two-dimensional "
+                "Mono (channels, bins) frame containing every requested channel; "
+                "call warmup() first"
+            )
+        return (shape[0], shape[1]), np.dtype(data_type.value.lower()).str
+
+    @staticmethod
+    def _ndattribute_resource(data_key: str, attribute_name: str) -> StreamResourceInfo:
+        return StreamResourceInfo(
+            data_key=data_key,
+            shape=(),
+            chunk_shape=(16384,),
+            dtype_numpy=np.dtype("float64").str,
+            parameters={"dataset": f"{_NDATTRIBUTES_GROUP}/{attribute_name}"},
+        )
+
+    async def prepare_unbounded(self, datakey_name: str) -> _Xspress3StreamResourceDataProvider:
+        frame_shape, frame_dtype = await self._read_array_metadata()
+        delegate = await self._delegate.prepare_unbounded(datakey_name)
+
+        frames_per_chunk = delegate.resources[0].chunk_shape[0]
+        resources = [
+            StreamResourceInfo(
+                data_key=datakey_name,
+                shape=frame_shape,
+                chunk_shape=(frames_per_chunk, *frame_shape),
+                dtype_numpy=frame_dtype,
+                parameters={"dataset": _SPECTRUM_DATASET},
+            )
+        ]
+        for channel in self.channel_numbers:
+            channel_key = f"{datakey_name}-channel{channel}"
+            resources.append(
+                StreamResourceInfo(
+                    data_key=channel_key,
+                    shape=(frame_shape[1],),
+                    chunk_shape=(frames_per_chunk, frame_shape[1]),
+                    dtype_numpy=frame_dtype,
+                    parameters={
+                        "dataset": _SPECTRUM_DATASET,
+                        "slice": f":,{channel - 1},:",
+                    },
+                )
+            )
+            if self.include_roi_streams:
+                for roi in self.roi_numbers:
+                    resources.append(
+                        self._ndattribute_resource(
+                            f"{channel_key}-roi{roi}",
+                            f"CHAN{channel}ROI{roi}",
+                        )
+                    )
+            if self.include_sca_streams:
+                for sca_name, dataset_suffix in zip(_SCA_NAMES, _SCA_DATASETS, strict=True):
+                    resources.append(
+                        self._ndattribute_resource(
+                            f"{channel_key}-{sca_name}",
+                            f"CHAN{channel}{dataset_suffix}",
+                        )
+                    )
+
+        return _Xspress3StreamResourceDataProvider(
+            uri=delegate.uri,
+            resources=resources,
+            mimetype="application/x-hdf5",
+            collections_written_signal=delegate.collections_written_signal,
+            flush_signal=delegate.flush_signal,
+        )
+
+    async def stop(self) -> None:
+        await self._delegate.stop()
+
+    def get_hinted_fields(self, datakey_name: str) -> Sequence[str]:
+        return [datakey_name]
+
+
+class Xspress3Detector(AreaDetector[Xspress3DriverIO]):
+    """Canonical ophyd-async Xspress3 detector.
+
+    Bulk and per-channel spectra are always described in Bluesky documents.
+    Enable ROI or SCA streams only when the IOC's NDAttributes configuration
+    writes the corresponding canonical datasets into the HDF file.
+
+    External edge triggering always uses ``TTL + Internal``. External level
+    triggering accepts only the TTL or LVDS ``Veto Only`` and ``Both`` modes.
+
+    The community IOC forwards ``NumImages`` through ``NumCapture_CALC`` to
+    the HDF plugin. This detector permanently disables that record because
+    ophyd-async owns ``NumCapture`` and keeps capture unbounded until stop.
+    """
+
+    def __init__(
+        self,
+        prefix: str,
+        path_provider: PathProvider,
+        *,
+        channel_numbers: Sequence[int] = (1,),
+        mca_roi_numbers: Sequence[int] = (1, 2, 3, 4),
+        driver_suffix: str = "det1:",
+        hdf_suffix: str = "HDF1:",
+        minimum_deadtime: float = 0.0,
+        include_roi_streams: bool = False,
+        include_sca_streams: bool = False,
+        include_roi_reset: bool = False,
+        plugins: Mapping[str, NDPluginBaseIO] | None = None,
+        config_sigs: Sequence[SignalR] = (),
+        name: str = "",
+    ) -> None:
+        if minimum_deadtime < 0:
+            raise ValueError("minimum_deadtime must be non-negative")
+        channel_numbers = _validate_numbers(channel_numbers, "channel", 1, 16)
+        mca_roi_numbers = _validate_numbers(mca_roi_numbers, "ROI", 1, 48)
+
+        driver = Xspress3DriverIO(prefix + driver_suffix)
+        self.channels = DeviceVector(
+            {
+                channel_number: Xspress3Channel(
+                    prefix,
+                    channel_number,
+                    mca_roi_numbers,
+                    include_roi_reset=include_roi_reset,
+                )
+                for channel_number in channel_numbers
+            }
+        )
+        self.level_trigger_mode = soft_signal_rw(Xspress3LevelTriggerMode, Xspress3LevelTriggerMode.TTL_VETO_ONLY)
+        trigger_logic = Xspress3TriggerLogic(
+            driver,
+            level_trigger_mode=self.level_trigger_mode,
+            minimum_deadtime=minimum_deadtime,
+        )
+        acquire_logic = Xspress3AcquireLogic(driver)
+        writer_factory = ADWriterFactory(
+            writer_cls=Xspress3HDFIO,
+            writer_suffix=hdf_suffix,
+            writer_name="hdf",
+            datakey_suffix="",
+            array_description=None,
+            data_logic_factory=lambda writer, array_description, _driver, _plugins: Xspress3HDFDataLogic(
+                array_description,
+                path_provider,
+                writer,
+                driver,
+                channel_numbers=channel_numbers,
+                roi_numbers=mca_roi_numbers,
+                include_roi_streams=include_roi_streams,
+                include_sca_streams=include_sca_streams,
+            ),
+        )
+        super().__init__(
+            driver,
+            prefix,
+            writer_factory,
+            acquire_logic=acquire_logic,
+            trigger_logic=trigger_logic,
+            plugins=plugins,
+            config_sigs=(
+                driver.trigger_mode,
+                driver.num_images,
+                driver.num_channels,
+                self.level_trigger_mode,
+                driver.ctrl_dtc,
+                driver.erase_on_start,
+                *config_sigs,
+            ),
+            name=name,
+        )
+
+    @AsyncStatus.wrap
+    async def stage(self) -> None:
+        await self.hdf.num_capture_calc_disable.set(1)
+        await super().stage()
+
+    @AsyncStatus.wrap
+    async def prepare(self, value: TriggerInfo) -> None:
+        await self.hdf.num_capture_calc_disable.set(1)
+        await self.hdf.num_capture.set(0)
+        await super().prepare(value)
+
+    @AsyncStatus.wrap
+    async def stop(self, success: bool = False) -> None:
+        await super().unstage()
+
+    @AsyncStatus.wrap
+    async def unstage(self) -> None:
+        await super().unstage()
+
+    async def warmup(self, exposure: float = 0.1) -> None:
+        saved = await asyncio.gather(
+            self.driver.array_callbacks.get_value(),
+            self.driver.trigger_mode.get_value(),
+            self.driver.num_images.get_value(),
+            self.driver.acquire_time.get_value(),
+            self.driver.erase_on_start.get_value(),
+        )
+        warmup_acquire = ADAcquireLogic(self.driver)
+        try:
+            await warmup_acquire.ensure_stopped()
+            await self.hdf.num_capture_calc_disable.set(1)
+            await _gather_and_raise(
+                self.driver.array_callbacks.set(True),
+                self.driver.trigger_mode.set(Xspress3TriggerMode.INTERNAL),
+                self.driver.num_images.set(1),
+                self.driver.acquire_time.set(exposure),
+                self.driver.erase_on_start.set(True),
+            )
+            await warmup_acquire.start_acquiring()
+            await warmup_acquire.wait_for_idle()
+        finally:
+            try:
+                await warmup_acquire.ensure_stopped()
+            finally:
+                await _gather_and_raise(
+                    self.driver.array_callbacks.set(saved[0]),
+                    self.driver.trigger_mode.set(saved[1]),
+                    self.driver.num_images.set(saved[2]),
+                    self.driver.acquire_time.set(saved[3]),
+                    self.driver.erase_on_start.set(saved[4]),
+                )
+
+
+def _validate_number(value: int, label: str, minimum: int, maximum: int) -> None:
+    if type(value) is not int:
+        raise ValueError(f"{label} number {value!r} is not an integer")
+    if not minimum <= value <= maximum:
+        raise ValueError(f"{label} number {value!r} is outside the allowed interval [{minimum}, {maximum}]")
+
+
+def _validate_numbers(values: Sequence[int], label: str, minimum: int, maximum: int) -> tuple[int, ...]:
+    numbers = tuple(values)
+    for value in numbers:
+        _validate_number(value, label, minimum, maximum)
+    if len(numbers) != len(set(numbers)):
+        raise ValueError(f"{label} numbers must be unique")
+    return tuple(sorted(numbers))
