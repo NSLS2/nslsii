@@ -114,6 +114,48 @@ async def test_quadem_reads_scalar_statistics_from_standard_detector() -> None:
 
 
 @pytest.mark.asyncio
+async def test_quadem_configures_readables_and_hints() -> None:
+    device = QuadEM("TEST:QEM:", name="qem")
+    await device.connect(mock=True)
+    signals = (
+        device.current[1].mean_value,
+        device.current[1].sigma,
+        device.sum_all.net,
+    )
+    device.configure_readables(signals, hinted_signals=(device.sum_all.net,))
+    for value, signal in enumerate(signals, start=1):
+        set_mock_value(signal, float(value))
+
+    await device.stage()
+    await _complete_trigger(device)
+
+    readings = await device.read()
+    assert {name: reading["value"] for name, reading in readings.items()} == {
+        signals[0].name: 1.0,
+        signals[1].name: 2.0,
+        signals[2].name: 3.0,
+    }
+    assert device.hints["fields"] == [device.sum_all.net.name]
+
+
+@pytest.mark.asyncio
+async def test_quadem_rejects_invalid_or_prepared_readables() -> None:
+
+    device = QuadEM("TEST:QEM:", name="qem")
+    await device.connect(mock=True)
+
+    with pytest.raises(ValueError, match="subset"):
+        device.configure_readables(
+            (device.current[1].mean_value,),
+            hinted_signals=(device.sum_all.mean_value,),
+        )
+
+    await device.prepare(TriggerInfo())
+    with pytest.raises(RuntimeError, match="before prepare"):
+        device.configure_readables((device.sum_all.mean_value,))
+
+
+@pytest.mark.asyncio
 async def test_quadem_preparation_and_lifecycle() -> None:
     device = QuadEM("TEST:QEM:", name="qem")
     await device.connect(mock=True)

@@ -46,7 +46,6 @@ class NDTimeSeriesIO(NDPluginBaseIO):
     ``NDTimeSeriesIO`` owns shared plugin configuration and acquisition state.
     Each ``NDTimeSeriesNIO`` child exposes the waveform for one plugin address.
     """
-
     ts_acquire: A[SignalRW[bool], PvSuffix("TSAcquire"), EpicsOptions(wait=non_zero)]
     ts_acquiring: A[SignalR[bool], PvSuffix("TSAcquiring")]
     ts_read: A[SignalRW[bool], PvSuffix("TSRead")]
