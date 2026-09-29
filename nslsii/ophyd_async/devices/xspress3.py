@@ -1,8 +1,28 @@
+import asyncio
+from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Annotated as A
 
 import numpy as np
-from ophyd_async.core import Array1D, Device, SignalR, SignalRW, StrictEnum
-from ophyd_async.epics.adcore import ADBaseIO, NDROIStatIO
+from ophyd_async.core import (
+    Array1D,
+    Device,
+    DetectorTriggerLogic,
+    DeviceVector,
+    SignalDict,
+    SignalR,
+    SignalRW,
+    StrictEnum,
+)
+from ophyd_async.epics.adcore import (
+    ADAcquireLogic,
+    ADBaseIO,
+    ADWriterFactory,
+    AreaDetector,
+    NDPluginBaseIO,
+    NDROIStatIO,
+    trigger_info_from_num_images,
+)
 from ophyd_async.epics.core import EpicsDevice, PvSuffix, epics_signal_r
 
 
@@ -98,3 +118,113 @@ class Xspress3ChannelIO(Device):
         self.dead_time_factor = Xspress3SCAIO(f"{sca}9:")
         self.dead_time_percent = Xspress3SCAIO(f"{sca}10:")
         super().__init__(name=name)
+
+
+#: The driver sets up the internal time frame generator with
+#: XSP3_ITFG_GAP_MODE_1US, i.e. a 1 microsecond gap between frames
+XSPRESS3_MIN_DEADTIME = 1e-6
+
+
+@dataclass
+class Xspress3TriggerLogic(DetectorTriggerLogic):
+    """Trigger logic for the Xspress3.
+
+    - internal: frames of ``livetime`` timed by the Xspress3's own frame
+      generator ("Internal")
+    - external edge: each TTL rising edge starts a frame of ``livetime``
+      ("TTL + Internal")
+    - external level: frames are the high periods of the TTL gate
+      ("TTL Veto Only")
+
+    The Xspress3 has no continuous image mode, so an unbounded acquisition
+    (``num=0``) asks for as many frames as the IOC was configured for.
+
+    :param driver: The Xspress3 driver
+    :param deadtime: Minimum gap between externally triggered frames
+    """
+
+    driver: Xspress3DriverIO
+    deadtime: float = XSPRESS3_MIN_DEADTIME
+
+    def get_deadtime(self, config_values: SignalDict) -> float:
+        return self.deadtime
+
+    async def _prepare(
+        self, trigger_mode: Xspress3TriggerMode, num: int, livetime: float = 0.0
+    ):
+        if num == 0:
+            num = await self.driver.max_frames.get_value()
+        coros = [
+            self.driver.trigger_mode.set(trigger_mode),
+            self.driver.num_images.set(num),
+            # Otherwise spectra accumulate on top of the previous acquisition
+            self.driver.erase_on_start.set(True),
+        ]
+        if livetime:
+            coros.append(self.driver.acquire_time.set(livetime))
+        await asyncio.gather(*coros)
+
+    async def prepare_internal(self, num: int, livetime: float, deadtime: float):
+        # The gap between internal frames is fixed by the driver, so deadtime
+        # can't be set
+        await self._prepare(Xspress3TriggerMode.INTERNAL, num, livetime)
+
+    async def prepare_edge(self, num: int, livetime: float):
+        await self._prepare(Xspress3TriggerMode.TTL_INTERNAL, num, livetime)
+
+    async def prepare_level(self, num: int):
+        await self._prepare(Xspress3TriggerMode.TTL_VETO_ONLY, num)
+
+    async def default_trigger_info(self):
+        return await trigger_info_from_num_images(self.driver)
+
+
+class Xspress3Detector(AreaDetector[Xspress3DriverIO]):
+    """Create an Xspress3 AreaDetector instance.
+
+    The PV layout matches the example IOCs in the xspress3 module
+    (iocs/xspress3IOC/iocBoot), i.e. the driver at ``{prefix}det1:`` and the
+    HDF5 writer at ``{prefix}HDF1:``, so ``ADWriterFactory.hdf(path_provider)``
+    works with its defaults.
+
+    :param prefix: EPICS PV prefix for the detector, e.g. ``XSP3_4Chan:``
+    :param writer_factories: Factories for file writer plugins and their data logics
+    :param num_channels: Number of detector elements the IOC was started with
+    :param num_rois: Number of ROIs per channel to connect to (up to 48)
+    :param deadtime: Minimum gap between externally triggered frames
+    :param driver_suffix: Suffix for the driver PV, defaults to "det1:"
+    :param plugins: Additional areaDetector plugins to include
+    :param config_sigs: Additional signals to include in configuration
+    :param name: Name for the detector device
+    """
+
+    def __init__(
+        self,
+        prefix: str,
+        *writer_factories: ADWriterFactory,
+        num_channels: int,
+        num_rois: int = 8,
+        deadtime: float = XSPRESS3_MIN_DEADTIME,
+        driver_suffix: str = "det1:",
+        plugins: dict[str, NDPluginBaseIO] | None = None,
+        config_sigs: Sequence[SignalR] = (),
+        name: str = "",
+    ) -> None:
+        driver = Xspress3DriverIO(prefix + driver_suffix)
+        self.channels = DeviceVector(
+            {
+                i: Xspress3ChannelIO(prefix, i, num_rois=num_rois)
+                for i in range(1, num_channels + 1)
+            }
+        )
+        super().__init__(
+            driver,
+            prefix,
+            *writer_factories,
+            acquire_logic=ADAcquireLogic(driver),
+            trigger_logic=Xspress3TriggerLogic(driver, deadtime),
+            plugins=plugins,
+            # Deadtime correction changes the data type of the frames
+            config_sigs=(driver.deadtime_correction, *config_sigs),
+            name=name,
+        )
