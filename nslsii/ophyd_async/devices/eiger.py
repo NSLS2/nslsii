@@ -1,9 +1,14 @@
-"""ophyd-async support for the areaDetector ADEiger IOC."""
+"""ophyd-async support for the areaDetector ADEiger IOC (Dectris EIGER and EIGER2).
+
+See https://areadetector.github.io/areaDetector/ADEiger/eiger.html. The detector is armed once
+per scan; internally triggered points are software triggers into that series. Data is stored
+either by the IOC's HDF5 plugin fed from the DCU stream (recommended) or as the DCU FileWriter
+files saved by the IOC; see `EigerDetector`.
+"""
 
 from __future__ import annotations
 
 import asyncio
-from collections import deque
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import PureWindowsPath
@@ -50,11 +55,10 @@ from ophyd_async.epics.core import PvSuffix, stop_busy_record, wait_for_good_sta
 # NumImages for unbounded requests; the driver clamps to the DCU limit and the readback
 # reflects the clamped value.
 _MAX_NUM_IMAGES = 999_999
-# NumTriggers for internally triggered series. It bounds the software triggers a series
-# accepts, so it must exceed the number of trigger() calls in a scan (unknowable from an
-# implicit-prepare trigger()). Deliberately below the DCU maximum: at arm the driver allocates
-# one file slot per expected data file, and in FileWriter-counting mode that is one per
-# trigger. Exhausting it is still correct: the series ends and the next point arms a new one.
+# NumTriggers for internally triggered series: the number of software triggers a series accepts.
+# Deliberately modest: with the FileWriter source the driver allocates one file slot per trigger
+# at arm, and in both sources it computes NumImages * NumTriggers as a 32-bit int. A scan with
+# more points simply exhausts the series, and the next point arms a new one.
 _MAX_NUM_TRIGGERS = 10_000
 
 
@@ -138,9 +142,8 @@ def _image_data_type(bit_depth: int, signed: bool) -> ADBaseDataType:
 class EigerDriverIO(ADBaseIO, NDFileIO):
     """Records common to Eiger1 and Eiger2 (``eigerBase.template``).
 
-    ``DataType_RBV`` and ``ColorMode_RBV`` are disabled in the template and never update, so
-    ``image_data_type`` / ``image_color_mode`` provide the real NDArray description for plugin
-    writers (see `eiger_array_description`).
+    ``image_data_type`` and ``image_color_mode`` describe the NDArrays; the Eiger's
+    ``DataType_RBV`` and ``ColorMode_RBV`` are disabled.
     """
 
     # Standard Driver Parameters
@@ -297,17 +300,28 @@ class Eiger2DriverIO(EigerDriverIO):
 class EigerTriggerLogic(DetectorTriggerLogic):
     """Trigger logic for ADEiger.
 
-    ``NumImages``, ``NumTriggers`` and ``ManualTrigger`` are latched by the driver at arm, so
-    every ``prepare_*`` first ends any armed series; the next ``start_acquiring`` arms a new one
-    with the new values. ADEiger does not implement ``ImageMode``, so it is never set.
+    Every ``prepare_*`` ends any armed series (its parameters are latched at arm) and selects
+    where the IOC gets frames from:
+
+    - ``STREAM``: the DCU's ZMQ stream, with the FileWriter disabled. Frames are dropped if the
+      IOC falls behind, which surfaces as a timeout.
+    - ``FILE_WRITER``: DCU data files, one per trigger. Lossless.
 
     Parameters
     ----------
     driver : EigerDriverIO
         The Eiger driver.
+    source : EigerDataSource, default EigerDataSource.STREAM
+        ``STREAM`` when a plugin stores the data, ``FILE_WRITER`` with
+        `EigerFileWriterDataLogic`.
     """
 
     driver: EigerDriverIO
+    source: EigerDataSource = EigerDataSource.STREAM
+
+    def __post_init__(self) -> None:
+        if self.source is EigerDataSource.NONE:
+            raise ValueError("source must be STREAM or FILE_WRITER; with DataSource=None frames cannot be counted")
 
     def config_sigs(self) -> set[SignalR]:
         return {self.driver.dead_time}
@@ -331,64 +345,82 @@ class EigerTriggerLogic(DetectorTriggerLogic):
         await self.driver.acquire_time.set(livetime)
         await self.driver.acquire_period.set(livetime + deadtime)
 
-    async def prepare_internal(self, num: int, livetime: float, deadtime: float) -> None:
-        # num is the number of frames each software trigger produces
+    async def _prepare_series(self, trigger_mode: EigerTriggerMode, manual: bool, num: int) -> None:
+        # frames is what one software trigger (manual) or the whole series (external) produces,
+        # and hence the size of one DCU data file
+        frames = num or _MAX_NUM_IMAGES
         await self._disarm()
-        await self.driver.trigger_mode.set(EigerTriggerMode.INTERNAL_SERIES)
-        await asyncio.gather(
-            self.driver.manual_trigger.set(True),
-            self.driver.num_triggers.set(_MAX_NUM_TRIGGERS),
-            self.driver.num_images.set(num or _MAX_NUM_IMAGES),
-        )
+        await self.driver.trigger_mode.set(trigger_mode)
+        coros = [
+            self.driver.manual_trigger.set(manual),
+            self.driver.num_images.set(frames if manual else 1),
+            self.driver.num_triggers.set(_MAX_NUM_TRIGGERS if manual else frames),
+            self.driver.data_source.set(self.source),
+        ]
+        if self.source is EigerDataSource.STREAM:
+            coros += [
+                self.driver.stream_enable.set(True),
+                # The driver only downloads (and removes) DCU files when it is the FileWriter
+                # source or saving them; a still-enabled FileWriter would fill the DCU disk.
+                self.driver.fw_enable.set(False),
+            ]
+        else:
+            coros += [
+                self.driver.fw_enable.set(True),
+                self.driver.save_files.set(True),
+                # One DCU data file per trigger, so every trigger is counted as soon as its
+                # file is downloaded
+                # WARN: The file may not be flushed to disk yet.
+                # See https://github.com/areaDetector/ADEiger/issues/112 for more.
+                self.driver.fw_nimgs_per_file.set(frames),
+            ]
+        await asyncio.gather(*coros)
+        if self.source is EigerDataSource.FILE_WRITER:
+            images_per_file = await self.driver.fw_nimgs_per_file.get_value(cached=False)
+            if images_per_file < frames:
+                # The DCU clamps silently, and the data logic relies on one file per trigger
+                raise ValueError(f"{frames} images per data file exceeds the detector limit of {images_per_file}")
+
+    async def prepare_internal(self, num: int, livetime: float, deadtime: float) -> None:
+        await self._prepare_series(EigerTriggerMode.INTERNAL_SERIES, manual=True, num=num)
         await self._set_exposure(livetime, deadtime)
 
     async def prepare_edge(self, num: int, livetime: float) -> None:
         # One edge -> one internally timed image
-        await self._disarm()
-        await self.driver.trigger_mode.set(EigerTriggerMode.EXTERNAL_SERIES)
-        await asyncio.gather(
-            self.driver.manual_trigger.set(False),
-            self.driver.num_images.set(1),
-            self.driver.num_triggers.set(num or _MAX_NUM_IMAGES),
-        )
+        await self._prepare_series(EigerTriggerMode.EXTERNAL_SERIES, manual=False, num=num)
         await self._set_exposure(livetime, 0.0)
 
     async def prepare_level(self, num: int) -> None:
         # Gate width is the exposure
-        await self._disarm()
-        await self.driver.trigger_mode.set(EigerTriggerMode.EXTERNAL_ENABLE)
-        await asyncio.gather(
-            self.driver.manual_trigger.set(False),
-            self.driver.num_images.set(1),
-            self.driver.num_triggers.set(num or _MAX_NUM_IMAGES),
-        )
+        await self._prepare_series(EigerTriggerMode.EXTERNAL_ENABLE, manual=False, num=num)
 
     async def default_trigger_info(self):
         return await trigger_info_from_num_images(self.driver)
 
 
 class EigerAcquireLogic(DetectorAcquireLogic):
-    """Arm once per staged scan, software-trigger each internally triggered point.
+    """Arm once per scan; each internally triggered point is a ``Trigger`` PV software trigger.
 
     Parameters
     ----------
     driver : EigerDriverIO
         The Eiger driver.
-    on_armed : callable, optional
-        Called with ``(SequenceId, ArrayCounter)`` right after every arm, so the data logic
-        can attribute subsequent frames to the new file series.
+    on_file_start : callable, optional
+        Called with ``(SequenceId, ArrayCounter)`` when the DCU FileWriter starts a data file:
+        at every software trigger, or at arm for an externally triggered series.
     """
 
     def __init__(
         self,
         driver: EigerDriverIO,
-        on_armed: Callable[[int, int], None] | None = None,
+        on_file_start: Callable[[int, int], None] | None = None,
     ) -> None:
         self.driver = driver
-        self._on_armed = on_armed
+        self._on_file_start = on_file_start
         self.acquire_status: AsyncStatus | None = None
 
     async def start_acquiring(self) -> None:
+        manual = await self.driver.manual_trigger.get_value()
         if not await self.driver.armed.get_value():
             # A previous series may still be processing files: Acquire=1 is ignored while
             # DetectorState is Acquire, so wait for the busy record to clear first.
@@ -401,17 +433,23 @@ class EigerAcquireLogic(DetectorAcquireLogic):
                 wait_for_set_completion=False,
                 timeout=DEFAULT_TIMEOUT,
             )
-            if self._on_armed is not None:
-                # The driver posts SequenceId and Armed in the same callback batch, so the
-                # SequenceId monitor may lag the Armed one; read both uncached.
-                sequence_id, first_collection = await asyncio.gather(
-                    self.driver.sequence_id.get_value(cached=False),
-                    self.driver.array_counter.get_value(cached=False),
-                )
-                self._on_armed(sequence_id, first_collection)
-        if await self.driver.manual_trigger.get_value():
-            # Software trigger into the armed series
+            if not manual:
+                # An externally triggered series is one data file
+                await self._file_started()
+        if manual:
+            # Each software trigger fills one data file
+            await self._file_started()
             await self.driver.trigger_.set(1.0)
+
+    async def _file_started(self) -> None:
+        if self._on_file_start is not None:
+            # The driver posts SequenceId and Armed in the same callback batch, so the
+            # SequenceId monitor may lag the Armed one; read both uncached.
+            sequence_id, first_frame = await asyncio.gather(
+                self.driver.sequence_id.get_value(cached=False),
+                self.driver.array_counter.get_value(cached=False),
+            )
+            self._on_file_start(sequence_id, first_frame)
 
     async def wait_for_idle(self) -> None:
         # Internally triggered series stay armed between points; frame arrival is already
@@ -433,64 +471,63 @@ class EigerAcquireLogic(DetectorAcquireLogic):
         await self.driver.manual_trigger.set(False)
 
 
+@dataclass
+class _DataFile:
+    sequence_id: int
+    index: int
+    first_frame: int
+    bundle: ComposeStreamResourceBundle | None = None
+
+
 class EigerFileWriterDataProvider(StreamableDataProvider):
     """Stream documents for the Eiger FileWriter data files of one scan.
 
-    A scan produces ``{filename}_{SequenceId}_data_{k:06d}.h5`` files: a new ``k`` every
-    ``images_per_file`` frames and a new ``SequenceId`` whenever a series is (re)armed. One
-    ``stream_resource`` is emitted per data file with resource-local ``stream_datum`` indices;
-    bluesky assigns the event ``seq_nums``. Series boundaries are reported through
-    `record_series`; file boundaries are arithmetic.
+    Every data file holds exactly one trigger's frames and gets one ``stream_resource``.
+    `record_file` reports each file as the DCU starts it; files are named
+    ``{filename}_{SequenceId}_data_{k:06d}.h5`` with ``k`` counting files within a series.
 
     Parameters
     ----------
     directory_uri : str
         URI of the directory holding the data files, with trailing separator.
     filename : str
-        Filename stem; ``FWNamePattern`` is ``f"{filename}_$id"``.
-    images_per_file : int
-        ``FWNImagesPerFile`` readback.
+        Filename stem given to ``FWNamePattern`` as ``{filename}_$id``.
     resource : StreamResourceInfo
         Description of the ``/entry/data/data`` dataset.
     collections_written_signal : SignalR[int]
-        ``ArrayCounter``; frames counted by the IOC.
+        ``ArrayCounter``.
     """
 
     def __init__(
         self,
         directory_uri: str,
         filename: str,
-        images_per_file: int,
         resource: StreamResourceInfo,
         collections_written_signal: SignalR[int],
     ) -> None:
         self.collections_written_signal = collections_written_signal
         self._directory_uri = directory_uri
         self._filename = filename
-        self._images_per_file = images_per_file
         self._resource = resource
         self._composer = ComposeStreamResource()
-        # Arms not yet reached by the emitted documents: (SequenceId, first ArrayCounter)
-        self._series: deque[tuple[int, int]] = deque()
-        self._current: tuple[int, int] | None = None
-        self._file_index = 0
-        self._bundle: ComposeStreamResourceBundle | None = None
-        # Event index at which the current bundle's file started
-        self._bundle_start = 0
-        # Events emitted so far
-        self._last_emitted = 0
+        self._files: list[_DataFile] = []
+        # Position in _files of the file being emitted, and frames emitted so far
+        self._current = 0
+        self._emitted = 0
 
-    def record_series(self, sequence_id: int, first_collection: int) -> None:
-        """Register a newly armed series.
+    def record_file(self, sequence_id: int, first_frame: int) -> None:
+        """Register the data file the DCU is starting.
 
         Parameters
         ----------
         sequence_id : int
-            ``SequenceId`` assigned by the driver at arm.
-        first_collection : int
-            ``ArrayCounter`` value at arm; frames from here on belong to this series.
+            ``SequenceId`` of the armed series.
+        first_frame : int
+            ``ArrayCounter`` now; frames from here on land in this file.
         """
-        self._series.append((sequence_id, first_collection))
+        last = self._files[-1] if self._files else None
+        index = last.index + 1 if last and last.sequence_id == sequence_id else 1
+        self._files.append(_DataFile(sequence_id, index, first_frame))
 
     async def make_datakeys(self, collections_per_event: int) -> dict[str, DataKey]:
         resource = self._resource
@@ -507,80 +544,63 @@ class EigerFileWriterDataProvider(StreamableDataProvider):
     async def make_stream_docs(
         self, collections_written: int, collections_per_event: int
     ) -> AsyncIterator[StreamAsset]:
-        cpe = collections_per_event
-        ipf = self._images_per_file
-        if ipf % cpe:
-            raise ValueError(f"FWNImagesPerFile={ipf} is not a multiple of collections_per_event={cpe}")
-        target = collections_written // cpe
-        while self._last_emitted < target:
-            if self._series and self._series[0][1] // cpe <= self._last_emitted:
-                # A new series starts here
-                self._current = self._series.popleft()
-                self._bundle = None
-            if self._current is None:
-                raise RuntimeError("Eiger frames counted before any series was armed")
-            seq, first = self._current
-            # 1-based, matches the DCU's image_nr_start=1
-            file_index = (self._last_emitted * cpe - first) // ipf + 1
-            if self._bundle is None or file_index != self._file_index:
-                self._file_index = file_index
-                self._bundle = self._composer(
+        while self._emitted < collections_written:
+            next_file = self._files[self._current + 1] if self._current + 1 < len(self._files) else None
+            if next_file is not None and next_file.first_frame <= self._emitted:
+                self._current += 1
+                continue
+            file = self._files[self._current]
+            stop = collections_written if next_file is None else min(collections_written, next_file.first_frame)
+            if file.bundle is None:
+                file.bundle = self._composer(
                     mimetype="application/x-hdf5",
-                    uri=f"{self._directory_uri}{self._filename}_{seq}_data_{file_index:06d}.h5",
+                    uri=f"{self._directory_uri}{self._filename}_{file.sequence_id}_data_{file.index:06d}.h5",
                     data_key=self._resource.data_key,
                     parameters={"chunk_shape": self._resource.chunk_shape, **self._resource.parameters},
                     uid=None,
                     validate=True,
                 )
-                self._bundle_start = self._last_emitted
-                yield "stream_resource", self._bundle.stream_resource_doc
-            # Emit up to the end of this data file, or the start of the next series
-            stop = min(target, (first + file_index * ipf) // cpe)
-            if self._series:
-                stop = min(stop, self._series[0][1] // cpe)
+                yield "stream_resource", file.bundle.stream_resource_doc
             yield (
                 "stream_datum",
-                self._bundle.compose_stream_datum(
-                    {"start": self._last_emitted - self._bundle_start, "stop": stop - self._bundle_start}
+                file.bundle.compose_stream_datum(
+                    {
+                        "start": (self._emitted - file.first_frame) // collections_per_event,
+                        "stop": (stop - file.first_frame) // collections_per_event,
+                    }
                 ),
             )
-            self._last_emitted = stop
+            self._emitted = stop
 
 
 @dataclass
 class EigerFileWriterDataLogic(DetectorDataLogic):
-    """Data logic for the Eiger FileWriter files downloaded by the IOC.
+    """Data logic referencing the DCU FileWriter files saved by the IOC.
+
+    One data file and one ``stream_resource`` per trigger.
+
+    Limitation: ADEiger has no PV that reports when a downloaded file has been written to disk,
+    so documents are emitted when the file has been downloaded and decoded, while the IOC may
+    still be writing it. In practice the write finishes first, but it is not guaranteed.
 
     Parameters
     ----------
     driver : EigerDriverIO
         The Eiger driver.
     path_provider : PathProvider
-        Provides the directory and filename for the DCU data files.
-    data_source : EigerDataSource, default EigerDataSource.FILE_WRITER
-        Where the IOC counts frames from. ``FILE_WRITER`` sizes each data file to one
-        software trigger so every point publishes as soon as its file is parsed; ``STREAM``
-        counts frames live from the ZMQ stream and keeps the IOC's file size.
+        Directory and filename for the data files.
     datakey_suffix : str, default ""
         Suffix appended to the detector name to form the data key.
     """
 
     driver: EigerDriverIO
     path_provider: PathProvider
-    data_source: EigerDataSource = EigerDataSource.FILE_WRITER
     datakey_suffix: str = ""
     _provider: EigerFileWriterDataProvider | None = field(default=None, init=False, repr=False)
 
-    def __post_init__(self) -> None:
-        if self.data_source is EigerDataSource.NONE:
-            raise ValueError(
-                "data_source must be FILE_WRITER or STREAM: with DataSource=None the IOC produces no "
-                "NDArrays and frames cannot be counted"
-            )
-
-    def record_series(self, sequence_id: int, first_collection: int) -> None:
+    def record_file(self, sequence_id: int, first_frame: int) -> None:
         provider = error_if_none(self._provider, "prepare_unbounded must run before the Eiger is armed")
-        provider.record_series(sequence_id, first_collection)
+        provider.record_file(sequence_id, first_frame)
 
     def get_hinted_fields(self, datakey_name: str) -> Sequence[str]:
         return [datakey_name]
@@ -597,45 +617,15 @@ class EigerFileWriterDataLogic(DetectorDataLogic):
         coros = [
             driver.file_path.set(directory),
             driver.fw_name_pattern.set(f"{path_info.filename}_$id"),
-            driver.fw_enable.set(True),
-            driver.save_files.set(True),
-            driver.data_source.set(self.data_source),
             # StandardDetector counts from the raw ArrayCounter and the driver never resets it
             driver.array_counter.set(0),
         ]
-        if self.data_source is EigerDataSource.STREAM:
-            coros.append(driver.stream_enable.set(True))
         if isinstance(driver, Eiger2DriverIO):
             # Only the Legacy layout has a 3-D /entry/data/data
             coros.append(driver.fw_hdf5_format.set(EigerHDF5Format.LEGACY))
         await asyncio.gather(*coros)
         if not await driver.file_path_exists.get_value():
             raise FileNotFoundError(f"Path {directory} doesn't exist or not writable!")
-        # Trigger-logic prepare has already run, so these are the values latched at arm
-        num_images, num_triggers, manual, configured = await asyncio.gather(
-            driver.num_images.get_value(),
-            driver.num_triggers.get_value(),
-            driver.manual_trigger.get_value(),
-            driver.fw_nimgs_per_file.get_value(),
-        )
-        # Frames produced per software trigger (manual) or per series (external): both are a
-        # whole number of events, which a data file boundary must never split.
-        frames_per_unit = num_images if manual else num_images * num_triggers
-        if self.data_source is EigerDataSource.FILE_WRITER:
-            # Frames are only counted when a data file is parsed, so a file must close at
-            # every point
-            requested = frames_per_unit
-        else:
-            # Frames are counted live; keep the IOC's size but align it to whole units
-            requested = max(frames_per_unit, configured - configured % frames_per_unit)
-        await driver.fw_nimgs_per_file.set(requested)
-        images_per_file = await driver.fw_nimgs_per_file.get_value(cached=False)
-        if manual and images_per_file < requested:
-            # A manual series never ends on its own, so a clamped file size would leave the
-            # last partial file of every trigger unparsed
-            raise ValueError(
-                f"{requested} images per trigger exceeds the detector limit of {images_per_file} images per file"
-            )
         bit_depth, ny, nx = await asyncio.gather(
             driver.bit_depth_image.get_value(),
             driver.array_size_y.get_value(),
@@ -653,7 +643,6 @@ class EigerFileWriterDataLogic(DetectorDataLogic):
         self._provider = EigerFileWriterDataProvider(
             path_info.directory_uri,
             path_info.filename,
-            images_per_file,
             resource,
             driver.array_counter,
         )
@@ -663,15 +652,8 @@ class EigerFileWriterDataLogic(DetectorDataLogic):
 def eiger_array_description(driver: EigerDriverIO) -> NDArrayDescription:
     """NDArray description for plugin writers fed by an Eiger driver.
 
-    Parameters
-    ----------
-    driver : EigerDriverIO
-        Driver whose ``image_data_type`` / ``image_color_mode`` describe the NDArrays.
-
-    Returns
-    -------
-    NDArrayDescription
-        Shape from ``ArraySizeY_RBV`` x ``ArraySizeX_RBV``, dtype from the Eiger bit depth.
+    Uses ``image_data_type``/``image_color_mode`` because the Eiger's ``DataType_RBV`` and
+    ``ColorMode_RBV`` never update.
     """
     return NDArrayDescription(
         shape_signals=[driver.array_size_y, driver.array_size_x],
@@ -683,22 +665,23 @@ def eiger_array_description(driver: EigerDriverIO) -> NDArrayDescription:
 class EigerDetector(AreaDetector[EigerDriverIO]):
     """An ADEiger detector.
 
-    One Eiger series is used per staged scan: the detector arms on the first ``trigger()`` /
-    ``kickoff()`` (at ``prepare()`` for external triggers), internally triggered points are
-    ``Trigger`` PV software triggers into that series, and ``unstage()`` ends it.
+    The detector is armed once per scan and stays armed between points; ``unstage()`` ends the
+    series. Data can be stored two ways:
+
+    - ``ADWriterFactory.hdf(path_provider)`` (recommended): the IOC's HDF5 plugin writes one
+      file per scan from the DCU stream. The Dectris master file is not produced.
+    - ``path_provider=``: the IOC saves the DCU FileWriter files, one per point, including the
+      master file. Lossless, but see `EigerFileWriterDataLogic` for its limitation.
 
     Parameters
     ----------
     prefix : str
         EPICS PV prefix for the detector.
     *writer_factories : ADWriterFactory
-        Factories for areaDetector file writer plugins and their data logics. Their
-        ``datakey_suffix`` must differ from ``""`` when ``path_provider`` is given.
+        areaDetector file writer plugins. Use a non-empty ``datakey_suffix`` when combined with
+        ``path_provider``.
     path_provider : PathProvider, optional
-        Enables the Eiger FileWriter data logic, writing DCU data files to the provided
-        directory.
-    data_source : EigerDataSource, default EigerDataSource.FILE_WRITER
-        How the IOC counts frames for the FileWriter data logic.
+        Save the DCU FileWriter files to this location.
     driver_cls : type[EigerDriverIO], default Eiger2DriverIO
         `Eiger2DriverIO` or `Eiger1DriverIO`.
     driver_suffix : str, default "cam1:"
@@ -716,7 +699,6 @@ class EigerDetector(AreaDetector[EigerDriverIO]):
         prefix: str,
         *writer_factories: ADWriterFactory,
         path_provider: PathProvider | None = None,
-        data_source: EigerDataSource = EigerDataSource.FILE_WRITER,
         driver_cls: type[EigerDriverIO] = Eiger2DriverIO,
         driver_suffix: str = "cam1:",
         plugins: Mapping[str, NDPluginBaseIO] | None = None,
@@ -724,9 +706,7 @@ class EigerDetector(AreaDetector[EigerDriverIO]):
         name: str = "",
     ) -> None:
         driver = driver_cls(prefix + driver_suffix)
-        data_logic = (
-            EigerFileWriterDataLogic(driver, path_provider, data_source=data_source) if path_provider else None
-        )
+        data_logic = EigerFileWriterDataLogic(driver, path_provider) if path_provider else None
         # The default description would read the disabled DataType_RBV
         factories = tuple(
             replace(f, array_description=eiger_array_description) if f.array_description is None else f
@@ -741,8 +721,10 @@ class EigerDetector(AreaDetector[EigerDriverIO]):
             driver,
             prefix,
             *factories,
-            acquire_logic=EigerAcquireLogic(driver, on_armed=data_logic.record_series if data_logic else None),
-            trigger_logic=EigerTriggerLogic(driver),
+            acquire_logic=EigerAcquireLogic(driver, on_file_start=data_logic.record_file if data_logic else None),
+            trigger_logic=EigerTriggerLogic(
+                driver, source=EigerDataSource.FILE_WRITER if data_logic else EigerDataSource.STREAM
+            ),
             plugins=plugins,
             config_sigs=config_sigs,
             name=name,

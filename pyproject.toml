@@ -53,6 +53,7 @@ dynamic = ["version"]
 dev = [
   "area_detector_handlers",
   "attrs>=17.4.0",
+  "bluesky-tiled-plugins",
   "build",
   "coverage",
   "doct",
@@ -67,6 +68,7 @@ dev = [
   "ruff",
   "sphinx",
   "sphinx_rtd_theme",
+  "tiled[server]",
 ]
 
 [project.scripts]
