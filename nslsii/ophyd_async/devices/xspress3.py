@@ -9,16 +9,22 @@ from ophyd_async.core import (
     Device,
     DetectorTriggerLogic,
     DeviceVector,
+    PathProvider,
     SignalDict,
     SignalR,
     SignalRW,
+    StreamableDataProvider,
+    StreamResourceDataProvider,
+    StreamResourceInfo,
     StrictEnum,
 )
 from ophyd_async.epics.adcore import (
     ADAcquireLogic,
     ADBaseIO,
+    ADHDFDataLogic,
     ADWriterFactory,
     AreaDetector,
+    NDFileHDF5IO,
     NDPluginBaseIO,
     NDROIStatIO,
     trigger_info_from_num_images,
@@ -228,3 +234,86 @@ class Xspress3Detector(AreaDetector[Xspress3DriverIO]):
             config_sigs=(driver.deadtime_correction, *config_sigs),
             name=name,
         )
+
+
+@dataclass
+class Xspress3HDFDataLogic(ADHDFDataLogic):
+    """HDF5 data logic for Xspress3 that also exposes each channel spectrum
+    as its own Tiled-sliceable stream resource, alongside the usual combined
+    ``(channels, bins)`` array.
+
+    Every channel resource points at the same on-disk dataset as the main
+    one, with a ``slice`` parameter selecting just that channel. Tiled's
+    ``HDF5Consolidator`` reads that parameter and applies it when reading the
+    dataset back, so a consumer can fetch one channel's spectrum from Tiled
+    without reading the other channels.
+
+    :param num_channels: Number of channels to expose as per-channel
+        stream resources
+    """
+
+    num_channels: int = 1
+
+    async def prepare_unbounded(self, datakey_name: str) -> StreamableDataProvider:
+        provider = await super().prepare_unbounded(datakey_name)
+        main = provider.resources[0]
+        channel_resources = [
+            StreamResourceInfo(
+                data_key=f"{datakey_name}-channel{channel}",
+                shape=main.shape[1:],
+                chunk_shape=(main.chunk_shape[0], *main.shape[1:]),
+                dtype_numpy=main.dtype_numpy,
+                parameters={
+                    **main.parameters,
+                    "slice": (":", str(channel - 1), ":"),
+                    "squeeze": True,
+                },
+            )
+            for channel in range(1, self.num_channels + 1)
+        ]
+        return StreamResourceDataProvider(
+            uri=provider.uri,
+            resources=[*provider.resources, *channel_resources],
+            mimetype="application/x-hdf5",
+            collections_written_signal=provider.collections_written_signal,
+            flush_signal=provider.flush_signal,
+        )
+
+    def get_hinted_fields(self, datakey_name: str) -> Sequence[str]:
+        # Per-channel slices are opt-in extras, only the combined array is hinted
+        return [datakey_name]
+
+
+def xspress3_hdf_writer(
+    path_provider: PathProvider,
+    num_channels: int,
+    writer_suffix: str = "HDF1:",
+    writer_name: str = "hdf",
+) -> ADWriterFactory[NDFileHDF5IO]:
+    """Create an HDF5 writer factory for Xspress3 with per-channel slicing.
+
+    Use in place of ``adcore.ADWriterFactory.hdf`` when a consumer needs to
+    read a single channel's spectrum out of Tiled directly, rather than the
+    full ``(num_channels, bins)`` array.
+
+    :param path_provider: Provides file path information for each acquisition.
+    :param num_channels: Number of detector elements the IOC was started with.
+    :param writer_suffix: PV suffix for the NDFileHDF5 plugin, defaults to ``HDF1:``.
+    :param writer_name: Attribute name for the writer on the detector,
+        defaults to ``"hdf"``.
+    """
+    return ADWriterFactory(
+        writer_cls=NDFileHDF5IO,
+        writer_suffix=writer_suffix,
+        writer_name=writer_name,
+        datakey_suffix="",
+        array_description=None,
+        data_logic_factory=lambda writer, desc, driver, plugins: Xspress3HDFDataLogic(
+            array_description=desc,
+            path_provider=path_provider,
+            writer=writer,
+            driver=driver,
+            plugins=list(plugins),
+            num_channels=num_channels,
+        ),
+    )
