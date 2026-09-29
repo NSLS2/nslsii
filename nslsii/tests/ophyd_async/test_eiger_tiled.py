@@ -11,7 +11,7 @@ from ophyd_async.epics.adcore import ADWriterFactory
 from tiled.client import from_uri
 from tiled.server import SimpleTiledServer
 
-from nslsii.ophyd_async.devices import EigerDetector
+from nslsii.ophyd_async.devices import Eiger2DriverIO, EigerDetector
 
 
 @pytest.fixture
@@ -30,9 +30,9 @@ def tiled_client(tmp_path):
 def test_count_to_tiled(RE, path_provider, fake_ioc, tiled_client, storage, files):
     with init_devices(mock=True):
         if storage == "hdf_plugin":
-            det = EigerDetector("X:", ADWriterFactory.hdf(path_provider), name="det")
+            det = EigerDetector("X:", ADWriterFactory.hdf(path_provider), driver_cls=Eiger2DriverIO, name="det")
         else:
-            det = EigerDetector("X:", path_provider=path_provider, name="det")
+            det = EigerDetector("X:", driver_cls=Eiger2DriverIO, fw_path_provider=path_provider, name="det")
     fake_ioc(det.driver, hdf=det.hdf if storage == "hdf_plugin" else None, frame_shape=(4, 6))
     RE.subscribe(TiledWriter(tiled_client))
     uids: list[str] = []

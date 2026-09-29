@@ -12,11 +12,13 @@ from ophyd_async.core import (
 from ophyd_async.epics.adcore import ADWriterFactory
 
 from nslsii.ophyd_async.devices import (
+    Eiger1DriverIO,
+    Eiger2DriverIO,
     EigerDataSource,
     EigerDetector,
     EigerHDF5Format,
-    EigerTriggerLogic,
     EigerTriggerMode,
+    Pilatus4DriverIO,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -28,7 +30,7 @@ def puts(signal) -> list:
 
 async def make_detector(path_provider: StaticPathProvider, **kwargs) -> EigerDetector:
     async with init_devices(mock=True):
-        det = EigerDetector("X:", path_provider=path_provider, name="det", **kwargs)
+        det = EigerDetector("X:", driver_cls=Eiger2DriverIO, fw_path_provider=path_provider, name="det", **kwargs)
     return det
 
 
@@ -207,15 +209,9 @@ async def test_images_per_file_clamped_by_detector(path_provider, fake_ioc, trig
         await det.prepare(trigger_info)
 
 
-async def test_trigger_logic_rejects_no_source(path_provider, fake_ioc):
-    det = await make_detector(path_provider)
-    with pytest.raises(ValueError, match="STREAM or FILE_WRITER"):
-        EigerTriggerLogic(det.driver, source=EigerDataSource.NONE)
-
-
 async def test_plugin_writer_step_scan(path_provider, fake_ioc, tmp_path):
     async with init_devices(mock=True):
-        det = EigerDetector("X:", ADWriterFactory.hdf(path_provider), name="det")
+        det = EigerDetector("X:", ADWriterFactory.hdf(path_provider), driver_cls=Eiger2DriverIO, name="det")
     fake_ioc(det.driver, hdf=det.hdf, frame_shape=(4, 6))
     driver = det.driver
     await det.stage()
@@ -247,9 +243,10 @@ async def test_plugin_writer_step_scan(path_provider, fake_ioc, tmp_path):
         assert f["/entry/data/data"].shape == (4, 4, 6)
 
 
-async def test_plugin_writer_uses_eiger_dtype(path_provider, fake_ioc):
+@pytest.mark.parametrize("driver_cls", [Eiger1DriverIO, Eiger2DriverIO, Pilatus4DriverIO])
+async def test_plugin_writer_uses_eiger_dtype(path_provider, fake_ioc, driver_cls):
     async with init_devices(mock=True):
-        det = EigerDetector("X:", ADWriterFactory.hdf(path_provider), name="det")
+        det = EigerDetector("X:", ADWriterFactory.hdf(path_provider), driver_cls=driver_cls, name="det")
     fake_ioc(det.driver, hdf=det.hdf)
     set_mock_value(det.driver.bit_depth_image, 32)
     set_mock_value(det.driver.signed_data, True)
@@ -260,4 +257,6 @@ async def test_plugin_writer_uses_eiger_dtype(path_provider, fake_ioc):
 
 async def test_plugin_writer_datakey_collision(path_provider, fake_ioc):
     with pytest.raises(ValueError, match="distinct datakey_suffix"):
-        EigerDetector("X:", ADWriterFactory.hdf(path_provider), path_provider=path_provider)
+        EigerDetector(
+            "X:", ADWriterFactory.hdf(path_provider), driver_cls=Eiger2DriverIO, fw_path_provider=path_provider
+        )

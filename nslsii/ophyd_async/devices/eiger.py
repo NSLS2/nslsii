@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import PureWindowsPath
 from typing import Annotated as A
+from typing import Literal, TypeVar
 
 import numpy as np
 from bluesky.protocols import StreamAsset
@@ -45,7 +46,6 @@ from ophyd_async.epics.adcore import (
     ADState,
     ADWriterFactory,
     AreaDetector,
-    NDArrayDescription,
     NDFileIO,
     NDPluginBaseIO,
     trigger_info_from_num_images,
@@ -140,11 +140,7 @@ def _image_data_type(bit_depth: int, signed: bool) -> ADBaseDataType:
 
 
 class EigerDriverIO(ADBaseIO, NDFileIO):
-    """Records common to Eiger1 and Eiger2 (``eigerBase.template``).
-
-    ``image_data_type`` and ``image_color_mode`` describe the NDArrays; the Eiger's
-    ``DataType_RBV`` and ``ColorMode_RBV`` are disabled.
-    """
+    """Records common to Eiger1 and Eiger2 (``eigerBase.template``)."""
 
     # Standard Driver Parameters
     trigger_mode: A[SignalRW[EigerTriggerMode], PvSuffix.rbv("TriggerMode")]
@@ -252,10 +248,12 @@ class EigerDriverIO(ADBaseIO, NDFileIO):
         connector: DeviceConnector | None = None,
     ) -> None:
         super().__init__(prefix, with_pvi, name, connector)
-        self.image_data_type = derived_signal_r(
+        # DataType_RBV and ColorMode_RBV are disabled in the template; derive them instead so
+        # plugin writers describe the NDArrays correctly.
+        self.data_type = derived_signal_r(
             _image_data_type, bit_depth=self.bit_depth_image, signed=self.signed_data
         )
-        self.image_color_mode, _ = soft_signal_r_and_setter(ADBaseColorMode, ADBaseColorMode.MONO)
+        self.color_mode, _ = soft_signal_r_and_setter(ADBaseColorMode, ADBaseColorMode.MONO)
 
 
 class Eiger1DriverIO(EigerDriverIO):
@@ -296,6 +294,15 @@ class Eiger2DriverIO(EigerDriverIO):
     fw_hdf5_format: A[SignalRW[EigerHDF5Format], PvSuffix.rbv("FWHDF5Format")]
 
 
+class Pilatus4DriverIO(Eiger2DriverIO):
+    """Pilatus4 driver (``pilatus4.template``): Eiger2 plus two more thresholds."""
+
+    threshold3_enable: A[SignalRW[bool], PvSuffix.rbv("Threshold3Enable")]
+    threshold3_energy: A[SignalRW[float], PvSuffix.rbv("Threshold3Energy")]
+    threshold4_enable: A[SignalRW[bool], PvSuffix.rbv("Threshold4Enable")]
+    threshold4_energy: A[SignalRW[float], PvSuffix.rbv("Threshold4Energy")]
+
+
 @dataclass
 class EigerTriggerLogic(DetectorTriggerLogic):
     """Trigger logic for ADEiger.
@@ -317,11 +324,7 @@ class EigerTriggerLogic(DetectorTriggerLogic):
     """
 
     driver: EigerDriverIO
-    source: EigerDataSource = EigerDataSource.STREAM
-
-    def __post_init__(self) -> None:
-        if self.source is EigerDataSource.NONE:
-            raise ValueError("source must be STREAM or FILE_WRITER; with DataSource=None frames cannot be counted")
+    source: Literal[EigerDataSource.STREAM, EigerDataSource.FILE_WRITER] = EigerDataSource.STREAM
 
     def config_sigs(self) -> set[SignalR]:
         return {self.driver.dead_time}
@@ -649,20 +652,10 @@ class EigerFileWriterDataLogic(DetectorDataLogic):
         return self._provider
 
 
-def eiger_array_description(driver: EigerDriverIO) -> NDArrayDescription:
-    """NDArray description for plugin writers fed by an Eiger driver.
-
-    Uses ``image_data_type``/``image_color_mode`` because the Eiger's ``DataType_RBV`` and
-    ``ColorMode_RBV`` never update.
-    """
-    return NDArrayDescription(
-        shape_signals=[driver.array_size_y, driver.array_size_x],
-        data_type_signal=driver.image_data_type,
-        color_mode_signal=driver.image_color_mode,
-    )
+EigerDriverIOT = TypeVar("EigerDriverIOT", bound=EigerDriverIO)
 
 
-class EigerDetector(AreaDetector[EigerDriverIO]):
+class EigerDetector(AreaDetector[EigerDriverIOT]):
     """An ADEiger detector.
 
     The detector is armed once per scan and stays armed between points; ``unstage()`` ends the
@@ -670,8 +663,8 @@ class EigerDetector(AreaDetector[EigerDriverIO]):
 
     - ``ADWriterFactory.hdf(path_provider)`` (recommended): the IOC's HDF5 plugin writes one
       file per scan from the DCU stream. The Dectris master file is not produced.
-    - ``path_provider=``: the IOC saves the DCU FileWriter files, one per point, including the
-      master file. Lossless, but see `EigerFileWriterDataLogic` for its limitation.
+    - ``fw_path_provider=``: the IOC saves the DCU FileWriter files, one per point, including
+      the master file. Lossless, but see `EigerFileWriterDataLogic` for its limitation.
 
     Parameters
     ----------
@@ -679,11 +672,12 @@ class EigerDetector(AreaDetector[EigerDriverIO]):
         EPICS PV prefix for the detector.
     *writer_factories : ADWriterFactory
         areaDetector file writer plugins. Use a non-empty ``datakey_suffix`` when combined with
-        ``path_provider``.
-    path_provider : PathProvider, optional
+        ``fw_path_provider``.
+    driver_cls : type[EigerDriverIO]
+        `Eiger1DriverIO`, `Eiger2DriverIO` or `Pilatus4DriverIO`; ``driver`` is typed
+        accordingly.
+    fw_path_provider : PathProvider, optional
         Save the DCU FileWriter files to this location.
-    driver_cls : type[EigerDriverIO], default Eiger2DriverIO
-        `Eiger2DriverIO` or `Eiger1DriverIO`.
     driver_suffix : str, default "cam1:"
         PV suffix for the driver.
     plugins : Mapping[str, NDPluginBaseIO], optional
@@ -698,21 +692,16 @@ class EigerDetector(AreaDetector[EigerDriverIO]):
         self,
         prefix: str,
         *writer_factories: ADWriterFactory,
-        path_provider: PathProvider | None = None,
-        driver_cls: type[EigerDriverIO] = Eiger2DriverIO,
+        driver_cls: type[EigerDriverIOT],
+        fw_path_provider: PathProvider | None = None,
         driver_suffix: str = "cam1:",
         plugins: Mapping[str, NDPluginBaseIO] | None = None,
         config_sigs: Sequence[SignalR] = (),
         name: str = "",
     ) -> None:
         driver = driver_cls(prefix + driver_suffix)
-        data_logic = EigerFileWriterDataLogic(driver, path_provider) if path_provider else None
-        # The default description would read the disabled DataType_RBV
-        factories = tuple(
-            replace(f, array_description=eiger_array_description) if f.array_description is None else f
-            for f in writer_factories
-        )
-        if data_logic and any(f.datakey_suffix == data_logic.datakey_suffix for f in factories):
+        data_logic = EigerFileWriterDataLogic(driver, fw_path_provider) if fw_path_provider else None
+        if data_logic and any(f.datakey_suffix == data_logic.datakey_suffix for f in writer_factories):
             # describe() merges datakeys by dict update, so a collision silently drops a stream
             raise ValueError(
                 "writer_factories must use a distinct datakey_suffix when the Eiger FileWriter data logic is enabled"
@@ -720,7 +709,7 @@ class EigerDetector(AreaDetector[EigerDriverIO]):
         super().__init__(
             driver,
             prefix,
-            *factories,
+            *writer_factories,
             acquire_logic=EigerAcquireLogic(driver, on_file_start=data_logic.record_file if data_logic else None),
             trigger_logic=EigerTriggerLogic(
                 driver, source=EigerDataSource.FILE_WRITER if data_logic else EigerDataSource.STREAM
