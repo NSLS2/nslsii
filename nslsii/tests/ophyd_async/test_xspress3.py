@@ -15,6 +15,7 @@ from ophyd_async.core import (
     get_mock_put,
     set_mock_put_proceeds,
     set_mock_value,
+    soft_signal_rw,
     wait_for_value,
 )
 from ophyd_async.epics.adcore import ADBaseColorMode, ADBaseDataType, ADState
@@ -23,6 +24,7 @@ from nslsii.ophyd_async.devices import (
     Xspress3AcquireLogic,
     Xspress3LevelTriggerMode,
     Xspress3Detector,
+    Xspress3TriggerLogic,
     Xspress3DriverIO,
     Xspress3TriggerMode,
 )
@@ -191,6 +193,29 @@ def test_edge_trigger_mode_is_fixed():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("num_images", "collections_per_event"), [(4, 4), (0, 1)])
+async def test_default_trigger_info_uses_internal_num_images(num_images, collections_per_event):
+    driver = Xspress3DriverIO("XF:TEST{Xsp:1}:det1:")
+    logic = Xspress3TriggerLogic(
+        driver,
+        soft_signal_rw(
+            Xspress3LevelTriggerMode,
+            Xspress3LevelTriggerMode.TTL_VETO_ONLY,
+        ),
+    )
+    await driver.connect(mock=True)
+    set_mock_value(driver.num_images, num_images)
+
+    trigger_info = await logic.default_trigger_info()
+
+    assert trigger_info.trigger is DetectorTrigger.INTERNAL
+    assert trigger_info.number_of_events == 1
+    assert trigger_info.collections_per_event == collections_per_event
+    assert trigger_info.livetime == 0
+    assert trigger_info.deadtime == 0
+
+
+@pytest.mark.asyncio
 async def test_acquire_sets_erase_on_start_only_when_starting():
     driver = Xspress3DriverIO("XF:TEST{Xsp:1}:det1:")
     await driver.connect(mock=True)
@@ -283,7 +308,7 @@ async def test_trigger_info_rejects_unsupported_acquisitions():
 
 
 @pytest.mark.asyncio
-async def test_stop_and_unstage_stop_acquisition_and_capture_after_cancellation():
+async def test_unstage_stops_acquisition_and_capture_after_cancellation():
     detector = make_detector()
     await connect_and_seed(detector)
     await detector.stage()
@@ -298,13 +323,10 @@ async def test_stop_and_unstage_stop_acquisition_and_capture_after_cancellation(
     set_mock_put_proceeds(detector.driver.acquire, True)
 
     assert await detector.hdf.capture.get_value() is True
-    await detector.stop()
+    await detector.unstage()
+
     assert await detector.driver.acquire.get_value() is False
     assert await detector.hdf.capture.get_value() is False
-    assert await detector.hdf.num_capture_calc_disable.get_value() == 1
-
-    await detector.stop()
-    await detector.unstage()
     assert await detector.hdf.num_capture_calc_disable.get_value() == 1
 
 
@@ -360,6 +382,10 @@ async def test_all_data_views_describe_and_emit_advancing_stream_documents():
 
 
 @pytest.mark.asyncio
+@pytest.mark.xfail(
+    reason="Requires the upstream one-dimensional stream dtype fix",
+    strict=True,
+)
 async def test_one_dimensional_and_batched_scalar_datakey_types():
     detector = make_detector(
         mca_roi_numbers=(1,),

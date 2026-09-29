@@ -1,3 +1,5 @@
+"""Ophyd-async support for the community Xspress3 IOC."""
+
 from __future__ import annotations
 
 import asyncio
@@ -8,7 +10,6 @@ from typing import Annotated as A
 
 import numpy as np
 
-from event_model import DataKey
 from ophyd_async.core import (
     Array1D,
     AsyncStatus,
@@ -38,6 +39,7 @@ from ophyd_async.epics.adcore import (
     NDArrayDescription,
     NDFileHDF5IO,
     NDPluginBaseIO,
+    trigger_info_from_num_images,
 )
 from ophyd_async.epics.core import (
     EpicsDevice,
@@ -79,13 +81,36 @@ class Xspress3LevelTriggerMode(StrictEnum):
 
 @dataclass
 class Xspress3TriggerLogic(DetectorTriggerLogic):
-    """Configure finite internal, edge, and level-triggered acquisitions."""
+    """Configure finite Xspress3 acquisitions.
+
+    Parameters
+    ----------
+    driver : Xspress3DriverIO
+        Xspress3 driver signals.
+    level_trigger_mode : SignalR[Xspress3LevelTriggerMode]
+        Runtime selection for externally level-triggered acquisitions.
+    minimum_deadtime : float, optional
+        Minimum supported deadtime in seconds.
+    """
 
     driver: Xspress3DriverIO
     level_trigger_mode: SignalR[Xspress3LevelTriggerMode]
+    # Unknown what the true minimum deadtime is
     minimum_deadtime: float = 0.0
 
     def get_deadtime(self, config_values: SignalDict) -> float:
+        """Return the configured minimum deadtime.
+
+        Parameters
+        ----------
+        config_values : SignalDict
+            Unused configuration values.
+
+        Returns
+        -------
+        float
+            Minimum deadtime in seconds.
+        """
         return self.minimum_deadtime
 
     @staticmethod
@@ -104,28 +129,63 @@ class Xspress3TriggerLogic(DetectorTriggerLogic):
         await asyncio.gather(*coros)
 
     async def prepare_internal(self, num: int, livetime: float, deadtime: float):
+        """Configure a finite internally triggered acquisition.
+
+        Parameters
+        ----------
+        num : int
+            Number of frames.
+        livetime : float
+            Exposure time in seconds, or zero to preserve the current value.
+        deadtime : float
+            Requested deadtime; nonzero values are unsupported since the ``AcquirePeriod``
+            record is disabled in the IOC.
+        """
         if deadtime:
             raise ValueError("Xspress3 internal triggering does not support deadtime")
         await self._prepare(Xspress3TriggerMode.INTERNAL, num, livetime)
 
     async def prepare_edge(self, num: int, livetime: float):
+        """Configure finite, externally edge-triggered frames.
+
+        Parameters
+        ----------
+        num : int
+            Number of frames.
+        livetime : float
+            Exposure time in seconds, or zero to preserve the current value.
+        """
         await self._prepare(Xspress3TriggerMode.TTL_INTERNAL, num, livetime)
 
     async def prepare_level(self, num: int):
+        """Configure finite, externally level-triggered frames.
+
+        Parameters
+        ----------
+        num : int
+            Number of frames.
+        """
         mode = Xspress3TriggerMode((await self.level_trigger_mode.get_value()).value)
         await self._prepare(mode, num)
 
+    async def default_trigger_info(self) -> TriggerInfo:
+        """Return internal trigger information preserving ``NumImages``."""
+        return await trigger_info_from_num_images(self.driver)
+
 
 class Xspress3AcquireLogic(ADAcquireLogic):
-    """Acquire with IOC-managed erase-on-start."""
+    """Start acquisition with IOC-managed erasure."""
+
+    driver: Xspress3DriverIO
 
     async def start_acquiring(self) -> None:
+        """Enable erase-on-start and begin acquisition."""
         await self.driver.erase_on_start.set(True)
         await super().start_acquiring()
 
 
 class Xspress3DriverIO(ADBaseIO):
-    """Signals provided by ``xspress3.template`` under the driver prefix."""
+    """Signals exposed by the community Xspress3 driver database."""
 
     trigger_mode: A[SignalRW[Xspress3TriggerMode], PvSuffix.rbv("TriggerMode")]
     erase: A[TriggerableCommand, PvSuffix("ERASE")]
@@ -150,13 +210,13 @@ class Xspress3DriverIO(ADBaseIO):
 
 
 class Xspress3HDFIO(NDFileHDF5IO):
-    """Canonical HDF plugin plus the Xspress3 NumCapture forward-link switch."""
+    """HDF plugin signals including the Xspress3 capture calculation switch."""
 
     num_capture_calc_disable: A[SignalRW[int], PvSuffix("NumCapture_CALC.DISA")]
 
 
 class Xspress3Sca(EpicsDevice):
-    """The eleven scaler values exposed for one Xspress3 channel."""
+    """Eleven scaler and deadtime values for one detector channel."""
 
     clock_ticks: A[SignalR[float], PvSuffix("0:Value_RBV")]
     reset_ticks: A[SignalR[float], PvSuffix("1:Value_RBV")]
@@ -181,7 +241,17 @@ class _Xspress3RoiTimeSeriesIO(EpicsDevice):
 
 
 class Xspress3McaRoi(EpicsDevice):
-    """One MCA ROI using half-open bin bounds."""
+    """Configure and read one MCA region of interest.
+
+    Parameters
+    ----------
+    prefix : str
+        EPICS prefix ending in the ROI number.
+    reset_prefix : str, optional
+        EPICS command PV used to reset this ROI.
+    name : str, optional
+        Ophyd device name.
+    """
 
     label: A[SignalRW[str], PvSuffix("Name")]
     min_x: A[SignalRW[int], PvSuffix.rbv("MinX")]
@@ -203,7 +273,24 @@ class Xspress3McaRoi(EpicsDevice):
 
     @AsyncStatus.wrap
     async def set_roi_bins(self, low_bin: int, high_bin: int, *, enabled: bool = True) -> None:
-        """Set this ROI to the half-open bin interval ``[low_bin, high_bin)``."""
+        """Set a half-open interval of MCA bins.
+
+        Parameters
+        ----------
+        low_bin : int
+            First included bin.
+        high_bin : int
+            First excluded bin.
+        enabled : bool, optional
+            Whether to enable the ROI after updating its bounds.
+
+        Raises
+        ------
+        TypeError
+            If either bound is not an integer.
+        ValueError
+            If bounds are negative, empty, or reversed.
+        """
         if type(low_bin) is not int or type(high_bin) is not int:
             raise TypeError("ROI bin bounds must be integers")
         if low_bin < 0 or high_bin < 0:
@@ -218,7 +305,21 @@ class Xspress3McaRoi(EpicsDevice):
 
 
 class Xspress3Channel(EpicsDevice):
-    """Spectrum, scalers, ROI time series, and ROIs for one channel."""
+    """Spectrum, scalers, and ROIs for one detector channel.
+
+    Parameters
+    ----------
+    prefix : str
+        Root EPICS prefix for the detector.
+    channel_number : int
+        One-based channel number in the range 1 through 16.
+    roi_numbers : sequence of int
+        ROI numbers in the range 1 through 48.
+    include_roi_reset : bool, optional
+        Create reset commands for ROI numbers 1 through 16.
+    name : str, optional
+        Ophyd device name.
+    """
 
     def __init__(
         self,
@@ -284,17 +385,28 @@ _SCA_DATASETS = (
 )
 
 
-class _Xspress3StreamResourceDataProvider(StreamResourceDataProvider):
-    async def make_datakeys(self, collections_per_event: int) -> dict[str, DataKey]:
-        datakeys = await super().make_datakeys(collections_per_event)
-        for resource in self.resources:
-            if collections_per_event > 1 or resource.shape:
-                datakeys[resource.data_key]["dtype"] = "array"
-        return datakeys
-
-
 class Xspress3HDFDataLogic(DetectorDataLogic):
-    """Expose fixed bulk and per-channel streams plus optional NDAttributes."""
+    """Describe fixed Xspress3 datasets from one HDF capture.
+
+    Parameters
+    ----------
+    array_description : NDArrayDescription
+        Signals describing the bulk spectrum array.
+    path_provider : PathProvider
+        Provider for HDF write and read paths.
+    writer : Xspress3HDFIO
+        HDF plugin signals.
+    driver : Xspress3DriverIO
+        Xspress3 driver signals.
+    channel_numbers : sequence of int
+        Channels exposed as per-channel spectrum streams.
+    roi_numbers : sequence of int
+        ROIs exposed when ROI streams are enabled.
+    include_roi_streams : bool, optional
+        Emit ROI NDAttribute stream resources.
+    include_sca_streams : bool, optional
+        Emit SCA NDAttribute stream resources.
+    """
 
     datakey_suffix = ""
 
@@ -355,7 +467,19 @@ class Xspress3HDFDataLogic(DetectorDataLogic):
             parameters={"dataset": f"{_NDATTRIBUTES_GROUP}/{attribute_name}"},
         )
 
-    async def prepare_unbounded(self, datakey_name: str) -> _Xspress3StreamResourceDataProvider:
+    async def prepare_unbounded(self, datakey_name: str) -> StreamResourceDataProvider:
+        """Prepare HDF capture and construct stream resources.
+
+        Parameters
+        ----------
+        datakey_name : str
+            Base Bluesky data key.
+
+        Returns
+        -------
+        StreamResourceDataProvider
+            Provider for bulk, channel, and optional attribute streams.
+        """
         frame_shape, frame_dtype = await self._read_array_metadata()
         delegate = await self._delegate.prepare_unbounded(datakey_name)
 
@@ -400,7 +524,7 @@ class Xspress3HDFDataLogic(DetectorDataLogic):
                         )
                     )
 
-        return _Xspress3StreamResourceDataProvider(
+        return StreamResourceDataProvider(
             uri=delegate.uri,
             resources=resources,
             mimetype="application/x-hdf5",
@@ -409,25 +533,63 @@ class Xspress3HDFDataLogic(DetectorDataLogic):
         )
 
     async def stop(self) -> None:
+        """Stop HDF capture."""
         await self._delegate.stop()
 
     def get_hinted_fields(self, datakey_name: str) -> Sequence[str]:
+        """Return the bulk spectrum as the hinted field.
+
+        Parameters
+        ----------
+        datakey_name : str
+            Bulk spectrum data key.
+
+        Returns
+        -------
+        sequence of str
+            Single hinted bulk-spectrum key.
+        """
         return [datakey_name]
 
 
 class Xspress3Detector(AreaDetector[Xspress3DriverIO]):
-    """Canonical ophyd-async Xspress3 detector.
+    """Control an Xspress3 detector using the community IOC.
 
-    Bulk and per-channel spectra are always described in Bluesky documents.
-    Enable ROI or SCA streams only when the IOC's NDAttributes configuration
-    writes the corresponding canonical datasets into the HDF file.
+    Parameters
+    ----------
+    prefix : str
+        Root EPICS prefix.
+    path_provider : PathProvider
+        Provider for HDF write and read paths.
+    channel_numbers : sequence of int, optional
+        One-based detector channels to expose.
+    mca_roi_numbers : sequence of int, optional
+        ROI numbers created for each channel.
+    driver_suffix : str, optional
+        Driver suffix appended to ``prefix``.
+    hdf_suffix : str, optional
+        HDF plugin suffix appended to ``prefix``.
+    minimum_deadtime : float, optional
+        Minimum external-trigger deadtime in seconds.
+    include_roi_streams : bool, optional
+        Emit configured ROI NDAttribute streams.
+    include_sca_streams : bool, optional
+        Emit all canonical SCA NDAttribute streams.
+    include_roi_reset : bool, optional
+        Create optional ROI reset commands.
+    plugins : mapping of str to NDPluginBaseIO, optional
+        Additional AreaDetector plugins.
+    config_sigs : sequence of SignalR, optional
+        Additional configuration signals.
+    name : str, optional
+        Ophyd device name.
 
-    External edge triggering always uses ``TTL + Internal``. External level
-    triggering accepts only the TTL or LVDS ``Veto Only`` and ``Both`` modes.
-
-    The community IOC forwards ``NumImages`` through ``NumCapture_CALC`` to
-    the HDF plugin. This detector permanently disables that record because
-    ophyd-async owns ``NumCapture`` and keeps capture unbounded until stop.
+    Notes
+    -----
+    Bulk and per-channel spectra are always emitted. External edge triggering
+    uses ``TTL + Internal``; level mode is selected through
+    ``level_trigger_mode``. The community IOC's ``NumCapture_CALC`` record is
+    permanently disabled because ophyd-async owns ``NumCapture``.
     """
 
     def __init__(
@@ -475,7 +637,7 @@ class Xspress3Detector(AreaDetector[Xspress3DriverIO]):
             writer_cls=Xspress3HDFIO,
             writer_suffix=hdf_suffix,
             writer_name="hdf",
-            datakey_suffix="",
+            datakey_suffix="_image",
             array_description=None,
             data_logic_factory=lambda writer, array_description, _driver, _plugins: Xspress3HDFDataLogic(
                 array_description,
@@ -509,24 +671,35 @@ class Xspress3Detector(AreaDetector[Xspress3DriverIO]):
 
     @AsyncStatus.wrap
     async def stage(self) -> None:
+        """Disable the capture calculation and make the detector ready."""
         await self.hdf.num_capture_calc_disable.set(1)
         await super().stage()
 
     @AsyncStatus.wrap
     async def prepare(self, value: TriggerInfo) -> None:
+        """Configure a finite acquisition.
+
+        Parameters
+        ----------
+        value : TriggerInfo
+            Trigger type, timing, and frame counts.
+        """
         await self.hdf.num_capture_calc_disable.set(1)
         await self.hdf.num_capture.set(0)
         await super().prepare(value)
 
-    @AsyncStatus.wrap
-    async def stop(self, success: bool = False) -> None:
-        await super().unstage()
-
-    @AsyncStatus.wrap
-    async def unstage(self) -> None:
-        await super().unstage()
-
     async def warmup(self, exposure: float = 0.1) -> None:
+        """Acquire one internal frame to initialize array metadata.
+
+        Parameters
+        ----------
+        exposure : float, optional
+            Warmup exposure time in seconds.
+
+        Notes
+        -----
+        Saved acquisition settings are restored even if warmup fails.
+        """
         saved = await asyncio.gather(
             self.driver.array_callbacks.get_value(),
             self.driver.trigger_mode.get_value(),
