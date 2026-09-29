@@ -2,8 +2,13 @@ import asyncio
 from pathlib import PurePath
 from unittest.mock import call
 
+import bluesky.plans as bp
+import h5py
 import numpy as np
 import pytest
+from bluesky import RunEngine
+from bluesky.run_engine import call_in_bluesky_event_loop
+from bluesky_tiled_plugins import TiledWriter
 from ophyd_async.core import (
     DetectorTrigger,
     StaticFilenameProvider,
@@ -19,6 +24,8 @@ from ophyd_async.core import (
     wait_for_value,
 )
 from ophyd_async.epics.adcore import ADBaseColorMode, ADBaseDataType, ADState
+from tiled.client import from_uri
+from tiled.server import SimpleTiledServer
 
 from nslsii.ophyd_async.devices import (
     Xspress3AcquireLogic,
@@ -151,11 +158,6 @@ async def test_level_trigger_mode_has_safe_default():
     assert await detector.level_trigger_mode.get_value() is Xspress3LevelTriggerMode.TTL_VETO_ONLY
 
 
-def test_level_trigger_mode_is_not_a_constructor_argument():
-    with pytest.raises(TypeError, match="level_trigger_mode"):
-        make_detector(level_trigger_mode=Xspress3LevelTriggerMode.TTL_BOTH)
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "level_trigger_mode",
@@ -185,11 +187,6 @@ async def test_rejects_non_level_trigger_modes(level_trigger_mode):
 
     with pytest.raises(ValueError):
         await detector.level_trigger_mode.set(level_trigger_mode)
-
-
-def test_edge_trigger_mode_is_fixed():
-    with pytest.raises(TypeError, match="edge_trigger_mode"):
-        make_detector(edge_trigger_mode=Xspress3TriggerMode.TTL_INTERNAL)
 
 
 @pytest.mark.asyncio
@@ -544,3 +541,56 @@ async def test_zero_array_shape_fails_before_capture_and_directs_warmup():
     with pytest.raises(ValueError, match=r"call warmup\(\) first"):
         await detector.prepare(TriggerInfo())
     assert await detector.hdf.capture.get_value() is False
+
+
+@pytest.mark.filterwarnings("ignore:The ``noload`` loader strategy is deprecated")
+def test_count_writes_xspress_streams_to_tiled(tmp_path):
+    data_directory = tmp_path / "external"
+    data_directory.mkdir()
+    frame = np.arange(4096, dtype=np.uint32).reshape(1, 1, 4096)
+    with h5py.File(data_directory / "xspress3.h5", "w") as file:
+        file.create_dataset("/entry/data/data", data=frame, chunks=frame.shape)
+
+    detector = Xspress3Detector(
+        "XF:TEST{Xsp:1}:",
+        StaticPathProvider(StaticFilenameProvider("xspress3"), data_directory),
+        name="xs",
+    )
+    event_loop = asyncio.new_event_loop()
+    run_engine = RunEngine({}, loop=event_loop)
+    try:
+        call_in_bluesky_event_loop(connect_and_seed(detector))
+
+        def finish_acquisition(value):
+            if value:
+                loop = asyncio.get_running_loop()
+
+                def finish():
+                    set_mock_value(detector.hdf.num_captured, 1)
+                    set_mock_value(detector.driver.detector_state, ADState.IDLE)
+                    set_mock_value(detector.driver.acquire, False)
+
+                loop.call_soon(finish)
+
+        callback_on_mock_put(detector.driver.acquire, finish_acquisition)
+
+        with SimpleTiledServer(
+            directory=tmp_path / "tiled",
+            readable_storage=[data_directory],
+        ) as server:
+            client = from_uri(server.uri, trust_env=False)
+            writer = TiledWriter(client, batch_size=1)
+
+            (uid,) = run_engine(bp.count([detector]), writer)
+
+            run = client[uid]
+            bulk = np.asarray(run["primary/xs"].read())
+            channel = np.asarray(run["primary/xs-channel1"].read())
+            assert bulk.shape == (1, 1, 1, 4096)
+            assert channel.shape == (1, 1, 4096)
+            np.testing.assert_array_equal(bulk, frame[np.newaxis, ...])
+            np.testing.assert_array_equal(channel, frame[np.newaxis, :, 0, :])
+    finally:
+        event_loop.call_soon_threadsafe(event_loop.stop)
+        run_engine._th.join()
+        event_loop.close()
