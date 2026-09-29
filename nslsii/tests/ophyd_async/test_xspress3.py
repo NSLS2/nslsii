@@ -86,7 +86,7 @@ async def test_canonical_sources_nonconsecutive_vectors_and_suffix_overrides():
     )
     assert detector.channels[4].scalers.dt_percent.source == ("mock+ca://XF:TEST{Xsp:1}:C4SCA:10:Value_RBV")
     assert detector.channels[1].rois[2].reset.source == ("mock+ca://XF:TEST{Xsp:1}:C1_ROI2:Reset")
-    assert not hasattr(detector.channels[1].rois[48], "reset")
+    assert detector.channels[1].rois[48].reset.source == ("mock+ca://XF:TEST{Xsp:1}:C1_ROI48:Reset")
     configuration = await detector.describe_configuration()
     expected_configuration = {
         detector.driver.trigger_mode.name,
@@ -105,7 +105,7 @@ async def test_canonical_sources_nonconsecutive_vectors_and_suffix_overrides():
     ("kwargs", "match"),
     [
         ({"channel_numbers": (0,)}, "channel"),
-        ({"channel_numbers": (17,)}, "channel"),
+        ({"channel_numbers": (25,)}, "channel"),
         ({"channel_numbers": (1.0,)}, "integer"),
         ({"channel_numbers": (1, 1)}, "unique"),
         ({"mca_roi_numbers": (0,)}, "ROI"),

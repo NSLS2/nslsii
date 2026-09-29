@@ -312,11 +312,11 @@ class Xspress3Channel(EpicsDevice):
     prefix : str
         Root EPICS prefix for the detector.
     channel_number : int
-        One-based channel number in the range 1 through 16.
+        One-based channel number in the range 1 through 24.
     roi_numbers : sequence of int
         ROI numbers in the range 1 through 48.
     include_roi_reset : bool, optional
-        Create reset commands for ROI numbers 1 through 16.
+        Create reset commands for ROI numbers 1 through 48.
     name : str, optional
         Ophyd device name.
     """
@@ -330,7 +330,7 @@ class Xspress3Channel(EpicsDevice):
         include_roi_reset: bool = False,
         name: str = "",
     ) -> None:
-        _validate_number(channel_number, "channel", 1, 16)
+        _validate_number(channel_number, "channel", 1, 24)
         roi_numbers = _validate_numbers(roi_numbers, "ROI", 1, 48)
         self.channel_number = channel_number
         self.spectrum = epics_signal_r(Array1D[np.float64], f"{prefix}MCA{channel_number}:ArrayData")
@@ -343,7 +343,7 @@ class Xspress3Channel(EpicsDevice):
                     f"{prefix}MCA{channel_number}ROI:{roi_number}:",
                     reset_prefix=(
                         f"{prefix}C{channel_number}_ROI{roi_number}:Reset"
-                        if include_roi_reset and roi_number <= 16
+                        if include_roi_reset
                         else None
                     ),
                 )
@@ -611,7 +611,7 @@ class Xspress3Detector(AreaDetector[Xspress3DriverIO]):
     ) -> None:
         if minimum_deadtime < 0:
             raise ValueError("minimum_deadtime must be non-negative")
-        channel_numbers = _validate_numbers(channel_numbers, "channel", 1, 16)
+        channel_numbers = _validate_numbers(channel_numbers, "channel", 1, 24)
         mca_roi_numbers = _validate_numbers(mca_roi_numbers, "ROI", 1, 48)
 
         driver = Xspress3DriverIO(prefix + driver_suffix)
