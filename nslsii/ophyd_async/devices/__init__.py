@@ -1,4 +1,4 @@
-from rbd9103 import (
+from .rbd9103 import (
     RBD9103,
     RBD9103Range,
     RBD9103Input,
