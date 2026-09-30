@@ -333,32 +333,6 @@ class QuadEMStatisticsDataLogic(DetectorDataLogic):
     signals: Sequence[SignalR]
     hinted_signals: Sequence[SignalR]
 
-    def configure(
-        self,
-        signals: Sequence[SignalR],
-        hinted_signals: Sequence[SignalR],
-    ) -> None:
-        """Set the signals emitted by this data logic.
-
-        Parameters
-        ----------
-        signals : Sequence[SignalR]
-            Signals to include in each scalar event.
-        hinted_signals : Sequence[SignalR]
-            Subset of ``signals`` exposed as Bluesky hints.
-
-        Raises
-        ------
-        ValueError
-            If a hinted signal is not included in ``signals``.
-        """
-        signals = tuple(signals)
-        hinted_signals = tuple(hinted_signals)
-        if any(signal not in signals for signal in hinted_signals):
-            raise ValueError("hinted_signals must be a subset of signals")
-        self.signals = signals
-        self.hinted_signals = hinted_signals
-
     async def prepare_single(self, datakey_name: str) -> ReadableDataProvider:
         await self.driver.wait_for_plugins.set(True)
         return _QuadEMSignalsDataProvider(self.signals)
@@ -390,9 +364,8 @@ class QuadEM(StandardDetector):
     -----
     The IOC must provide ``WaitForPlugins`` and eleven standard ``NDStats``
     plugins: four currents, sum X/Y/all, difference X/Y, and position X/Y.
-    This is an internal single-acquisition step detector, not a flyer. By
-    default it emits all eleven means and hints the four current means; call
-    ``configure_readables`` before ``prepare`` to select another signal set.
+    This is an internal single-acquisition step detector, not a flyer. It
+    always emits all eleven means and hints the four current means.
     """
 
     def __init__(
@@ -435,31 +408,3 @@ class QuadEM(StandardDetector):
             self._statistics_data_logic,
         )
         super().__init__(name=name)
-
-    def configure_readables(
-        self,
-        signals: Sequence[SignalR],
-        *,
-        hinted_signals: Sequence[SignalR] = (),
-    ) -> None:
-        """Select the scalar signals emitted by ``read``.
-
-        Parameters
-        ----------
-        signals : Sequence[SignalR]
-            Signals to include in each event. Any readable signal may be
-            selected deliberately.
-        hinted_signals : Sequence[SignalR], optional
-            Subset of ``signals`` advertised as Bluesky hinted fields.
-
-        Raises
-        ------
-        RuntimeError
-            If called after ``prepare``. Call ``stage`` to reset preparation
-            before selecting another signal set.
-        ValueError
-            If a hinted signal is not included in ``signals``.
-        """
-        if self._prepare_ctx is not None:
-            raise RuntimeError("configure_readables must be called before prepare")
-        self._statistics_data_logic.configure(signals, hinted_signals)
