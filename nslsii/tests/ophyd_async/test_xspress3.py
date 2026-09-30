@@ -29,17 +29,36 @@ from tiled.server import SimpleTiledServer
 
 from nslsii.ophyd_async.devices import (
     Xspress3AcquireLogic,
-    Xspress3LevelTriggerMode,
     Xspress3Detector,
-    Xspress3TriggerLogic,
     Xspress3DriverIO,
+    Xspress3HDFWriterFactory,
+    Xspress3LevelTriggerMode,
+    Xspress3TriggerLogic,
     Xspress3TriggerMode,
 )
 
 
-def make_detector(**kwargs) -> Xspress3Detector:
+def make_detector(
+    *,
+    channel_numbers=(1,),
+    mca_roi_numbers=(1, 2, 3, 4),
+    writer_suffix="HDF1:",
+    include_roi_streams=False,
+    include_sca_streams=False,
+    hinted_streams=None,
+    **kwargs,
+) -> Xspress3Detector:
     path_provider = StaticPathProvider(StaticFilenameProvider("xspress3"), PurePath("/tmp"))
-    return Xspress3Detector("XF:TEST{Xsp:1}:", path_provider, name="xs", **kwargs)
+    writer = Xspress3HDFWriterFactory(
+        path_provider,
+        channel_numbers=channel_numbers,
+        mca_roi_numbers=mca_roi_numbers,
+        writer_suffix=writer_suffix,
+        include_roi_streams=include_roi_streams,
+        include_sca_streams=include_sca_streams,
+        hinted_streams=hinted_streams,
+    )
+    return Xspress3Detector("XF:TEST{Xsp:1}:", writer, name="xs", **kwargs)
 
 
 async def connect_and_seed(
@@ -72,7 +91,7 @@ async def test_canonical_sources_nonconsecutive_vectors_and_suffix_overrides():
         channel_numbers=(4, 1),
         mca_roi_numbers=(48, 2),
         driver_suffix="driver:",
-        hdf_suffix="writer:",
+        writer_suffix="writer:",
         include_roi_reset=True,
     )
     await detector.connect(mock=True)
@@ -149,6 +168,72 @@ def test_profile_parameterization(profile, channel_numbers, roi_numbers):
     assert detector.name == "xs", profile
     assert tuple(detector.channels) == tuple(channel_numbers)
     assert all(tuple(channel.rois) == tuple(roi_numbers) for channel in detector.channels.values())
+
+
+def test_writer_factory_is_topology_source():
+    path_provider = StaticPathProvider(StaticFilenameProvider("xspress3"), PurePath("/tmp"))
+    writer = Xspress3HDFWriterFactory(
+        path_provider,
+        channel_numbers=(4, 1),
+        mca_roi_numbers=(48, 2),
+        writer_suffix="writer:",
+        include_roi_streams=True,
+        include_sca_streams=False,
+        hinted_streams=("channel1-roi2",),
+    )
+    detector = Xspress3Detector("XF:TEST{Xsp:1}:", writer, name="xs")
+
+    assert writer.path_provider is path_provider
+    assert writer.writer_suffix == "writer:"
+    assert writer.channel_numbers == (1, 4)
+    assert writer.mca_roi_numbers == (2, 48)
+    assert writer.include_roi_streams is True
+    assert writer.include_sca_streams is False
+    assert writer.hinted_streams == ("channel1-roi2",)
+    assert tuple(detector.channels) == writer.channel_numbers
+    assert all(tuple(channel.rois) == writer.mca_roi_numbers for channel in detector.channels.values())
+
+
+def test_default_hints_bulk_spectrum():
+    detector = make_detector()
+
+    assert detector.hints == {"fields": ["xs"]}
+
+
+def test_configured_roi_hints_are_detector_prefixed():
+    detector = make_detector(
+        channel_numbers=(1, 2),
+        mca_roi_numbers=(1, 2),
+        include_roi_streams=True,
+        hinted_streams=("channel1-roi1", "channel2-roi2"),
+    )
+
+    assert detector.hints == {"fields": ["xs-channel1-roi1", "xs-channel2-roi2"]}
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"hinted_streams": ("channel2",)}, "not emitted"),
+        ({"hinted_streams": ("channel1-roi1",)}, "not emitted"),
+        ({"hinted_streams": ("channel1-all_good",)}, "not emitted"),
+        ({"hinted_streams": ("unknown",)}, "not emitted"),
+        (
+            {
+                "mca_roi_numbers": (1,),
+                "include_roi_streams": True,
+                "hinted_streams": ("channel1-roi2",),
+            },
+            "not emitted",
+        ),
+        ({"hinted_streams": ("channel1", "channel1")}, "unique"),
+    ],
+)
+def test_invalid_hinted_streams_fail_during_factory_construction(kwargs, match):
+    path_provider = StaticPathProvider(StaticFilenameProvider("xspress3"), PurePath("/tmp"))
+
+    with pytest.raises(ValueError, match=match):
+        Xspress3HDFWriterFactory(path_provider, **kwargs)
 
 
 @pytest.mark.asyncio
@@ -551,9 +636,12 @@ def test_count_writes_xspress_streams_to_tiled(tmp_path):
     with h5py.File(data_directory / "xspress3.h5", "w") as file:
         file.create_dataset("/entry/data/data", data=frame, chunks=frame.shape)
 
+    writer_factory = Xspress3HDFWriterFactory(
+        StaticPathProvider(StaticFilenameProvider("xspress3"), data_directory)
+    )
     detector = Xspress3Detector(
         "XF:TEST{Xsp:1}:",
-        StaticPathProvider(StaticFilenameProvider("xspress3"), data_directory),
+        writer_factory,
         name="xs",
     )
     event_loop = asyncio.new_event_loop()

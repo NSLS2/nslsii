@@ -6,7 +6,7 @@ import asyncio
 from dataclasses import dataclass
 
 from collections.abc import Awaitable, Mapping, Sequence
-from typing import Annotated as A
+from typing import Annotated as A, cast
 
 import numpy as np
 
@@ -342,9 +342,7 @@ class Xspress3Channel(EpicsDevice):
                 roi_number: Xspress3McaRoi(
                     f"{prefix}MCA{channel_number}ROI:{roi_number}:",
                     reset_prefix=(
-                        f"{prefix}C{channel_number}_ROI{roi_number}:Reset"
-                        if include_roi_reset
-                        else None
+                        f"{prefix}C{channel_number}_ROI{roi_number}:Reset" if include_roi_reset else None
                     ),
                 )
                 for roi_number in roi_numbers
@@ -400,12 +398,15 @@ class Xspress3HDFDataLogic(DetectorDataLogic):
         Xspress3 driver signals.
     channel_numbers : sequence of int
         Channels exposed as per-channel spectrum streams.
-    roi_numbers : sequence of int
+    mca_roi_numbers : sequence of int
         ROIs exposed when ROI streams are enabled.
     include_roi_streams : bool, optional
         Emit ROI NDAttribute stream resources.
     include_sca_streams : bool, optional
         Emit SCA NDAttribute stream resources.
+    hinted_streams : sequence of str, optional
+        Detector-name-relative stream suffixes to hint. ``None`` hints the bulk
+        spectrum.
     """
 
     datakey_suffix = ""
@@ -418,15 +419,17 @@ class Xspress3HDFDataLogic(DetectorDataLogic):
         driver: Xspress3DriverIO,
         *,
         channel_numbers: Sequence[int],
-        roi_numbers: Sequence[int],
+        mca_roi_numbers: Sequence[int],
         include_roi_streams: bool = False,
         include_sca_streams: bool = False,
+        hinted_streams: Sequence[str] | None = None,
     ) -> None:
         self.driver = driver
         self.channel_numbers = tuple(channel_numbers)
-        self.roi_numbers = tuple(roi_numbers)
+        self.mca_roi_numbers = tuple(mca_roi_numbers)
         self.include_roi_streams = include_roi_streams
         self.include_sca_streams = include_sca_streams
+        self.hinted_streams = None if hinted_streams is None else tuple(hinted_streams)
         self._delegate = ADHDFDataLogic(
             array_description=array_description,
             path_provider=path_provider,
@@ -508,7 +511,7 @@ class Xspress3HDFDataLogic(DetectorDataLogic):
                 )
             )
             if self.include_roi_streams:
-                for roi in self.roi_numbers:
+                for roi in self.mca_roi_numbers:
                     resources.append(
                         self._ndattribute_resource(
                             f"{channel_key}-roi{roi}",
@@ -537,19 +540,106 @@ class Xspress3HDFDataLogic(DetectorDataLogic):
         await self._delegate.stop()
 
     def get_hinted_fields(self, datakey_name: str) -> Sequence[str]:
-        """Return the bulk spectrum as the hinted field.
+        """Return configured hints with the detector data-key prefix."""
+        if self.hinted_streams is None:
+            return [datakey_name]
+        return [datakey_name if not suffix else f"{datakey_name}-{suffix}" for suffix in self.hinted_streams]
 
-        Parameters
-        ----------
-        datakey_name : str
-            Bulk spectrum data key.
 
-        Returns
-        -------
-        sequence of str
-            Single hinted bulk-spectrum key.
-        """
-        return [datakey_name]
+class Xspress3HDFWriterFactory(ADWriterFactory[Xspress3HDFIO]):
+    """Create the Xspress3 HDF plugin and its stream data logic.
+
+    Parameters
+    ----------
+    path_provider : PathProvider
+        Provider for HDF write and read paths.
+    channel_numbers : sequence of int, optional
+        One-based detector channels exposed by the detector and writer.
+    mca_roi_numbers : sequence of int, optional
+        ROI numbers exposed for each channel.
+    writer_suffix : str, optional
+        HDF plugin suffix appended to the detector prefix.
+    include_roi_streams : bool, optional
+        Emit configured ROI NDAttribute streams.
+    include_sca_streams : bool, optional
+        Emit all canonical SCA NDAttribute streams.
+    hinted_streams : sequence of str, optional
+        Detector-name-relative stream suffixes to hint, such as
+        ``"channel1-roi1"``. ``None`` hints the bulk spectrum; ``""`` selects
+        the bulk spectrum explicitly.
+    """
+
+    path_provider: PathProvider
+    channel_numbers: tuple[int, ...]
+    mca_roi_numbers: tuple[int, ...]
+    include_roi_streams: bool
+    include_sca_streams: bool
+    hinted_streams: tuple[str, ...] | None
+
+    def __init__(
+        self,
+        path_provider: PathProvider,
+        *,
+        channel_numbers: Sequence[int] = (1,),
+        mca_roi_numbers: Sequence[int] = (1, 2, 3, 4),
+        writer_suffix: str = "HDF1:",
+        include_roi_streams: bool = False,
+        include_sca_streams: bool = False,
+        hinted_streams: Sequence[str] | None = None,
+    ) -> None:
+        channel_numbers = _validate_numbers(channel_numbers, "channel", 1, 24)
+        mca_roi_numbers = _validate_numbers(mca_roi_numbers, "ROI", 1, 48)
+        normalized_hints = None if hinted_streams is None else tuple(hinted_streams)
+        if normalized_hints is not None:
+            if len(normalized_hints) != len(set(normalized_hints)):
+                raise ValueError("hinted_streams must be unique")
+            emitted_streams = {""}
+            for channel_number in channel_numbers:
+                channel_stream = f"channel{channel_number}"
+                emitted_streams.add(channel_stream)
+                if include_roi_streams:
+                    emitted_streams.update(f"{channel_stream}-roi{roi_number}" for roi_number in mca_roi_numbers)
+                if include_sca_streams:
+                    emitted_streams.update(f"{channel_stream}-{sca_name}" for sca_name in _SCA_NAMES)
+            missing = tuple(stream for stream in normalized_hints if stream not in emitted_streams)
+            if missing:
+                raise ValueError(
+                    f"hinted_streams must refer to streams emitted by this writer; not emitted: {missing!r}"
+                )
+
+        self.path_provider = path_provider
+        self.channel_numbers = channel_numbers
+        self.mca_roi_numbers = mca_roi_numbers
+        self.include_roi_streams = include_roi_streams
+        self.include_sca_streams = include_sca_streams
+        self.hinted_streams = normalized_hints
+        super().__init__(
+            writer_cls=Xspress3HDFIO,
+            writer_suffix=writer_suffix,
+            writer_name="hdf",
+            datakey_suffix="_image",
+            array_description=None,
+            data_logic_factory=self._make_data_logic,
+        )
+
+    def _make_data_logic(
+        self,
+        writer: Xspress3HDFIO,
+        array_description: NDArrayDescription,
+        driver: ADBaseIO,
+        _plugins: Sequence[NDPluginBaseIO],
+    ) -> Xspress3HDFDataLogic:
+        return Xspress3HDFDataLogic(
+            array_description,
+            self.path_provider,
+            writer,
+            cast(Xspress3DriverIO, driver),
+            channel_numbers=self.channel_numbers,
+            mca_roi_numbers=self.mca_roi_numbers,
+            include_roi_streams=self.include_roi_streams,
+            include_sca_streams=self.include_sca_streams,
+            hinted_streams=self.hinted_streams,
+        )
 
 
 class Xspress3Detector(AreaDetector[Xspress3DriverIO]):
@@ -559,22 +649,12 @@ class Xspress3Detector(AreaDetector[Xspress3DriverIO]):
     ----------
     prefix : str
         Root EPICS prefix.
-    path_provider : PathProvider
-        Provider for HDF write and read paths.
-    channel_numbers : sequence of int, optional
-        One-based detector channels to expose.
-    mca_roi_numbers : sequence of int, optional
-        ROI numbers created for each channel.
+    writer_factory : Xspress3HDFWriterFactory
+        Factory defining the HDF writer and channel/ROI topology.
     driver_suffix : str, optional
         Driver suffix appended to ``prefix``.
-    hdf_suffix : str, optional
-        HDF plugin suffix appended to ``prefix``.
     minimum_deadtime : float, optional
         Minimum external-trigger deadtime in seconds.
-    include_roi_streams : bool, optional
-        Emit configured ROI NDAttribute streams.
-    include_sca_streams : bool, optional
-        Emit all canonical SCA NDAttribute streams.
     include_roi_reset : bool, optional
         Create optional ROI reset commands.
     plugins : mapping of str to NDPluginBaseIO, optional
@@ -595,15 +675,10 @@ class Xspress3Detector(AreaDetector[Xspress3DriverIO]):
     def __init__(
         self,
         prefix: str,
-        path_provider: PathProvider,
+        writer_factory: Xspress3HDFWriterFactory,
         *,
-        channel_numbers: Sequence[int] = (1,),
-        mca_roi_numbers: Sequence[int] = (1, 2, 3, 4),
         driver_suffix: str = "det1:",
-        hdf_suffix: str = "HDF1:",
         minimum_deadtime: float = 0.0,
-        include_roi_streams: bool = False,
-        include_sca_streams: bool = False,
         include_roi_reset: bool = False,
         plugins: Mapping[str, NDPluginBaseIO] | None = None,
         config_sigs: Sequence[SignalR] = (),
@@ -611,8 +686,6 @@ class Xspress3Detector(AreaDetector[Xspress3DriverIO]):
     ) -> None:
         if minimum_deadtime < 0:
             raise ValueError("minimum_deadtime must be non-negative")
-        channel_numbers = _validate_numbers(channel_numbers, "channel", 1, 24)
-        mca_roi_numbers = _validate_numbers(mca_roi_numbers, "ROI", 1, 48)
 
         driver = Xspress3DriverIO(prefix + driver_suffix)
         self.channels = DeviceVector(
@@ -620,10 +693,10 @@ class Xspress3Detector(AreaDetector[Xspress3DriverIO]):
                 channel_number: Xspress3Channel(
                     prefix,
                     channel_number,
-                    mca_roi_numbers,
+                    writer_factory.mca_roi_numbers,
                     include_roi_reset=include_roi_reset,
                 )
-                for channel_number in channel_numbers
+                for channel_number in writer_factory.channel_numbers
             }
         )
         self.level_trigger_mode = soft_signal_rw(Xspress3LevelTriggerMode, Xspress3LevelTriggerMode.TTL_VETO_ONLY)
@@ -633,23 +706,6 @@ class Xspress3Detector(AreaDetector[Xspress3DriverIO]):
             minimum_deadtime=minimum_deadtime,
         )
         acquire_logic = Xspress3AcquireLogic(driver)
-        writer_factory = ADWriterFactory(
-            writer_cls=Xspress3HDFIO,
-            writer_suffix=hdf_suffix,
-            writer_name="hdf",
-            datakey_suffix="_image",
-            array_description=None,
-            data_logic_factory=lambda writer, array_description, _driver, _plugins: Xspress3HDFDataLogic(
-                array_description,
-                path_provider,
-                writer,
-                driver,
-                channel_numbers=channel_numbers,
-                roi_numbers=mca_roi_numbers,
-                include_roi_streams=include_roi_streams,
-                include_sca_streams=include_sca_streams,
-            ),
-        )
         super().__init__(
             driver,
             prefix,
