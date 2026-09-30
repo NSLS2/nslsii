@@ -51,14 +51,19 @@ def make_detector(
     path_provider = StaticPathProvider(StaticFilenameProvider("xspress3"), PurePath("/tmp"))
     writer = Xspress3HDFWriterFactory(
         path_provider,
-        channel_numbers=channel_numbers,
-        mca_roi_numbers=mca_roi_numbers,
         writer_suffix=writer_suffix,
         include_roi_streams=include_roi_streams,
         include_sca_streams=include_sca_streams,
         hinted_streams=hinted_streams,
     )
-    return Xspress3Detector("XF:TEST{Xsp:1}:", writer, name="xs", **kwargs)
+    return Xspress3Detector(
+        "XF:TEST{Xsp:1}:",
+        writer,
+        channel_numbers=channel_numbers,
+        mca_roi_numbers=mca_roi_numbers,
+        name="xs",
+        **kwargs,
+    )
 
 
 async def connect_and_seed(
@@ -170,28 +175,50 @@ def test_profile_parameterization(profile, channel_numbers, roi_numbers):
     assert all(tuple(channel.rois) == tuple(roi_numbers) for channel in detector.channels.values())
 
 
-def test_writer_factory_is_topology_source():
+def test_detector_is_topology_source_for_writer():
     path_provider = StaticPathProvider(StaticFilenameProvider("xspress3"), PurePath("/tmp"))
     writer = Xspress3HDFWriterFactory(
         path_provider,
-        channel_numbers=(4, 1),
-        mca_roi_numbers=(48, 2),
         writer_suffix="writer:",
         include_roi_streams=True,
         include_sca_streams=False,
         hinted_streams=("channel1-roi2",),
     )
-    detector = Xspress3Detector("XF:TEST{Xsp:1}:", writer, name="xs")
+    detector = Xspress3Detector(
+        "XF:TEST{Xsp:1}:",
+        writer,
+        channel_numbers=(4, 1),
+        mca_roi_numbers=(48, 2),
+        name="xs",
+    )
 
     assert writer.path_provider is path_provider
     assert writer.writer_suffix == "writer:"
-    assert writer.channel_numbers == (1, 4)
-    assert writer.mca_roi_numbers == (2, 48)
     assert writer.include_roi_streams is True
     assert writer.include_sca_streams is False
     assert writer.hinted_streams == ("channel1-roi2",)
-    assert tuple(detector.channels) == writer.channel_numbers
-    assert all(tuple(channel.rois) == writer.mca_roi_numbers for channel in detector.channels.values())
+    assert tuple(detector.channels) == (1, 4)
+    assert all(tuple(channel.rois) == (2, 48) for channel in detector.channels.values())
+
+
+@pytest.mark.asyncio
+async def test_detector_without_writer_exposes_default_topology_without_streaming():
+    detector = Xspress3Detector("XF:TEST{Xsp:1}:", name="xs")
+
+    assert tuple(detector.channels) == (1,)
+    assert tuple(detector.channels[1].rois) == (1, 2, 3, 4)
+    assert detector.hints == {"fields": []}
+
+    await detector.connect(mock=True)
+    set_mock_value(detector.driver.detector_state, ADState.IDLE)
+    await detector.stage()
+    await detector.prepare(TriggerInfo())
+
+    assert await detector.describe() == {}
+    assert [document async for document in detector.collect_asset_docs()] == []
+
+    await detector.unstage()
+    await detector.warmup()
 
 
 def test_default_hints_bulk_spectrum():
@@ -229,11 +256,9 @@ def test_configured_roi_hints_are_detector_prefixed():
         ({"hinted_streams": ("channel1", "channel1")}, "unique"),
     ],
 )
-def test_invalid_hinted_streams_fail_during_factory_construction(kwargs, match):
-    path_provider = StaticPathProvider(StaticFilenameProvider("xspress3"), PurePath("/tmp"))
-
+def test_invalid_hinted_streams_fail_during_detector_construction(kwargs, match):
     with pytest.raises(ValueError, match=match):
-        Xspress3HDFWriterFactory(path_provider, **kwargs)
+        make_detector(**kwargs)
 
 
 @pytest.mark.asyncio

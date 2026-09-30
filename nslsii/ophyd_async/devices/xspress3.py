@@ -187,6 +187,18 @@ class Xspress3AcquireLogic(ADAcquireLogic):
 class Xspress3DriverIO(ADBaseIO):
     """Signals exposed by the community Xspress3 driver database."""
 
+    def __init__(
+        self,
+        prefix: str,
+        *,
+        channel_numbers: Sequence[int] = (),
+        mca_roi_numbers: Sequence[int] = (),
+        name: str = "",
+    ) -> None:
+        self.channel_numbers = _validate_numbers(channel_numbers, "channel", 1, 24)
+        self.mca_roi_numbers = _validate_numbers(mca_roi_numbers, "ROI", 1, 48)
+        super().__init__(prefix, name=name)
+
     trigger_mode: A[SignalRW[Xspress3TriggerMode], PvSuffix.rbv("TriggerMode")]
     erase: A[TriggerableCommand, PvSuffix("ERASE")]
     reset: A[TriggerableCommand, PvSuffix("RESET")]
@@ -553,10 +565,6 @@ class Xspress3HDFWriterFactory(ADWriterFactory[Xspress3HDFIO]):
     ----------
     path_provider : PathProvider
         Provider for HDF write and read paths.
-    channel_numbers : sequence of int, optional
-        One-based detector channels exposed by the detector and writer.
-    mca_roi_numbers : sequence of int, optional
-        ROI numbers exposed for each channel.
     writer_suffix : str, optional
         HDF plugin suffix appended to the detector prefix.
     include_roi_streams : bool, optional
@@ -570,8 +578,6 @@ class Xspress3HDFWriterFactory(ADWriterFactory[Xspress3HDFIO]):
     """
 
     path_provider: PathProvider
-    channel_numbers: tuple[int, ...]
-    mca_roi_numbers: tuple[int, ...]
     include_roi_streams: bool
     include_sca_streams: bool
     hinted_streams: tuple[str, ...] | None
@@ -580,36 +586,16 @@ class Xspress3HDFWriterFactory(ADWriterFactory[Xspress3HDFIO]):
         self,
         path_provider: PathProvider,
         *,
-        channel_numbers: Sequence[int] = (1,),
-        mca_roi_numbers: Sequence[int] = (1, 2, 3, 4),
         writer_suffix: str = "HDF1:",
         include_roi_streams: bool = False,
         include_sca_streams: bool = False,
         hinted_streams: Sequence[str] | None = None,
     ) -> None:
-        channel_numbers = _validate_numbers(channel_numbers, "channel", 1, 24)
-        mca_roi_numbers = _validate_numbers(mca_roi_numbers, "ROI", 1, 48)
         normalized_hints = None if hinted_streams is None else tuple(hinted_streams)
-        if normalized_hints is not None:
-            if len(normalized_hints) != len(set(normalized_hints)):
-                raise ValueError("hinted_streams must be unique")
-            emitted_streams = {""}
-            for channel_number in channel_numbers:
-                channel_stream = f"channel{channel_number}"
-                emitted_streams.add(channel_stream)
-                if include_roi_streams:
-                    emitted_streams.update(f"{channel_stream}-roi{roi_number}" for roi_number in mca_roi_numbers)
-                if include_sca_streams:
-                    emitted_streams.update(f"{channel_stream}-{sca_name}" for sca_name in _SCA_NAMES)
-            missing = tuple(stream for stream in normalized_hints if stream not in emitted_streams)
-            if missing:
-                raise ValueError(
-                    f"hinted_streams must refer to streams emitted by this writer; not emitted: {missing!r}"
-                )
+        if normalized_hints is not None and len(normalized_hints) != len(set(normalized_hints)):
+            raise ValueError("hinted_streams must be unique")
 
         self.path_provider = path_provider
-        self.channel_numbers = channel_numbers
-        self.mca_roi_numbers = mca_roi_numbers
         self.include_roi_streams = include_roi_streams
         self.include_sca_streams = include_sca_streams
         self.hinted_streams = normalized_hints
@@ -622,6 +608,27 @@ class Xspress3HDFWriterFactory(ADWriterFactory[Xspress3HDFIO]):
             data_logic_factory=self._make_data_logic,
         )
 
+    def _validate_hinted_streams(
+        self,
+        channel_numbers: Sequence[int],
+        mca_roi_numbers: Sequence[int],
+    ) -> None:
+        if self.hinted_streams is None:
+            return
+        emitted_streams = {""}
+        for channel_number in channel_numbers:
+            channel_stream = f"channel{channel_number}"
+            emitted_streams.add(channel_stream)
+            if self.include_roi_streams:
+                emitted_streams.update(f"{channel_stream}-roi{roi_number}" for roi_number in mca_roi_numbers)
+            if self.include_sca_streams:
+                emitted_streams.update(f"{channel_stream}-{sca_name}" for sca_name in _SCA_NAMES)
+        missing = tuple(stream for stream in self.hinted_streams if stream not in emitted_streams)
+        if missing:
+            raise ValueError(
+                f"hinted_streams must refer to streams emitted by this writer; not emitted: {missing!r}"
+            )
+
     def _make_data_logic(
         self,
         writer: Xspress3HDFIO,
@@ -629,13 +636,18 @@ class Xspress3HDFWriterFactory(ADWriterFactory[Xspress3HDFIO]):
         driver: ADBaseIO,
         _plugins: Sequence[NDPluginBaseIO],
     ) -> Xspress3HDFDataLogic:
+        xspress3_driver = cast(Xspress3DriverIO, driver)
+        self._validate_hinted_streams(
+            xspress3_driver.channel_numbers,
+            xspress3_driver.mca_roi_numbers,
+        )
         return Xspress3HDFDataLogic(
             array_description,
             self.path_provider,
             writer,
-            cast(Xspress3DriverIO, driver),
-            channel_numbers=self.channel_numbers,
-            mca_roi_numbers=self.mca_roi_numbers,
+            xspress3_driver,
+            channel_numbers=xspress3_driver.channel_numbers,
+            mca_roi_numbers=xspress3_driver.mca_roi_numbers,
             include_roi_streams=self.include_roi_streams,
             include_sca_streams=self.include_sca_streams,
             hinted_streams=self.hinted_streams,
@@ -649,8 +661,12 @@ class Xspress3Detector(AreaDetector[Xspress3DriverIO]):
     ----------
     prefix : str
         Root EPICS prefix.
-    writer_factory : Xspress3HDFWriterFactory
-        Factory defining the HDF writer and channel/ROI topology.
+    writer_factory : Xspress3HDFWriterFactory, optional
+        Factory defining the optional HDF writer and stream configuration.
+    channel_numbers : sequence of int, optional
+        One-based detector channels to expose.
+    mca_roi_numbers : sequence of int, optional
+        ROI numbers created for each channel.
     driver_suffix : str, optional
         Driver suffix appended to ``prefix``.
     minimum_deadtime : float, optional
@@ -666,8 +682,8 @@ class Xspress3Detector(AreaDetector[Xspress3DriverIO]):
 
     Notes
     -----
-    Bulk and per-channel spectra are always emitted. External edge triggering
-    uses ``TTL + Internal``; level mode is selected through
+    When a writer is configured, bulk and per-channel spectra are always emitted.
+    External edge triggering uses ``TTL + Internal``; level mode is selected through
     ``level_trigger_mode``. The community IOC's ``NumCapture_CALC`` record is
     permanently disabled because ophyd-async owns ``NumCapture``.
     """
@@ -675,8 +691,10 @@ class Xspress3Detector(AreaDetector[Xspress3DriverIO]):
     def __init__(
         self,
         prefix: str,
-        writer_factory: Xspress3HDFWriterFactory,
+        writer_factory: Xspress3HDFWriterFactory | None = None,
         *,
+        channel_numbers: Sequence[int] = (1,),
+        mca_roi_numbers: Sequence[int] = (1, 2, 3, 4),
         driver_suffix: str = "det1:",
         minimum_deadtime: float = 0.0,
         include_roi_reset: bool = False,
@@ -687,16 +705,22 @@ class Xspress3Detector(AreaDetector[Xspress3DriverIO]):
         if minimum_deadtime < 0:
             raise ValueError("minimum_deadtime must be non-negative")
 
-        driver = Xspress3DriverIO(prefix + driver_suffix)
+        driver = Xspress3DriverIO(
+            prefix + driver_suffix,
+            channel_numbers=channel_numbers,
+            mca_roi_numbers=mca_roi_numbers,
+        )
+        writer_factories = () if writer_factory is None else (writer_factory,)
+        self._has_hdf_writer = writer_factory is not None
         self.channels = DeviceVector(
             {
                 channel_number: Xspress3Channel(
                     prefix,
                     channel_number,
-                    writer_factory.mca_roi_numbers,
+                    driver.mca_roi_numbers,
                     include_roi_reset=include_roi_reset,
                 )
-                for channel_number in writer_factory.channel_numbers
+                for channel_number in driver.channel_numbers
             }
         )
         self.level_trigger_mode = soft_signal_rw(Xspress3LevelTriggerMode, Xspress3LevelTriggerMode.TTL_VETO_ONLY)
@@ -709,7 +733,7 @@ class Xspress3Detector(AreaDetector[Xspress3DriverIO]):
         super().__init__(
             driver,
             prefix,
-            writer_factory,
+            *writer_factories,
             acquire_logic=acquire_logic,
             trigger_logic=trigger_logic,
             plugins=plugins,
@@ -728,7 +752,8 @@ class Xspress3Detector(AreaDetector[Xspress3DriverIO]):
     @AsyncStatus.wrap
     async def stage(self) -> None:
         """Disable the capture calculation and make the detector ready."""
-        await self.hdf.num_capture_calc_disable.set(1)
+        if self._has_hdf_writer:
+            await self.hdf.num_capture_calc_disable.set(1)
         await super().stage()
 
     @AsyncStatus.wrap
@@ -740,8 +765,9 @@ class Xspress3Detector(AreaDetector[Xspress3DriverIO]):
         value : TriggerInfo
             Trigger type, timing, and frame counts.
         """
-        await self.hdf.num_capture_calc_disable.set(1)
-        await self.hdf.num_capture.set(0)
+        if self._has_hdf_writer:
+            await self.hdf.num_capture_calc_disable.set(1)
+            await self.hdf.num_capture.set(0)
         await super().prepare(value)
 
     async def warmup(self, exposure: float = 0.1) -> None:
@@ -766,7 +792,8 @@ class Xspress3Detector(AreaDetector[Xspress3DriverIO]):
         warmup_acquire = ADAcquireLogic(self.driver)
         try:
             await warmup_acquire.ensure_stopped()
-            await self.hdf.num_capture_calc_disable.set(1)
+            if self._has_hdf_writer:
+                await self.hdf.num_capture_calc_disable.set(1)
             await _gather_and_raise(
                 self.driver.array_callbacks.set(True),
                 self.driver.trigger_mode.set(Xspress3TriggerMode.INTERNAL),
