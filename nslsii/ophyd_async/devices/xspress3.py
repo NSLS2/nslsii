@@ -191,13 +191,23 @@ class Xspress3TriggerLogic(DetectorTriggerLogic):
 
 
 class Xspress3AcquireLogic(ADAcquireLogic):
-    """Start acquisition with IOC-managed erasure."""
+    """Erase before acquisition without forwarding the IOC's blank frame."""
 
     driver: Xspress3DriverIO
 
     async def start_acquiring(self) -> None:
-        """Enable erase-on-start and begin acquisition."""
-        await self.driver.erase_on_start.set(True)
+        """Erase with callbacks disabled, then begin acquisition."""
+        # Older IOCs forward a blank NDArray when they erase. Suppress that
+        # callback so one requested exposure produces exactly one HDF frame.
+        array_callbacks = await self.driver.array_callbacks.get_value()
+        await self.driver.erase_on_start.set(False)
+        if array_callbacks:
+            await self.driver.array_callbacks.set(False)
+        try:
+            await self.driver.erase.trigger()
+        finally:
+            if array_callbacks:
+                await self.driver.array_callbacks.set(True)
         await super().start_acquiring()
 
 

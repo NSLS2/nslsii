@@ -14,9 +14,9 @@ from ophyd_async.core import (
     StaticFilenameProvider,
     StaticPathProvider,
     TriggerInfo,
+    callback_on_mock_execute,
     callback_on_mock_put,
     get_mock,
-    get_mock_execute,
     get_mock_put,
     set_mock_put_proceeds,
     set_mock_value,
@@ -28,7 +28,6 @@ from tiled.client import from_uri
 from tiled.server import SimpleTiledServer
 
 from nslsii.ophyd_async.devices import (
-    Xspress3AcquireLogic,
     Xspress3Detector,
     Xspress3DriverIO,
     Xspress3HDFWriterFactory,
@@ -320,27 +319,6 @@ async def test_default_trigger_info_uses_internal_num_images(num_images, collect
     assert trigger_info.collections_per_event == collections_per_event
     assert trigger_info.livetime == 0
     assert trigger_info.deadtime == 0
-
-
-@pytest.mark.asyncio
-async def test_acquire_sets_erase_on_start_only_when_starting():
-    driver = Xspress3DriverIO("XF:TEST{Xsp:1}:det1:")
-    await driver.connect(mock=True)
-    set_mock_value(driver.detector_state, ADState.IDLE)
-    logic = Xspress3AcquireLogic(driver)
-    erase_on_start_put = get_mock_put(driver.erase_on_start)
-
-    set_mock_value(driver.erase_on_start, False)
-    await logic.ensure_ready()
-    erase_on_start_put.assert_not_awaited()
-
-    get_mock_execute(driver.erase).reset_mock()
-    await logic.start_acquiring()
-
-    assert await driver.erase_on_start.get_value() is True
-    get_mock_execute(driver.erase).assert_not_awaited()
-    set_mock_value(driver.acquire, False)
-    await logic.wait_for_idle()
 
 
 @pytest.mark.asyncio
@@ -673,18 +651,32 @@ def test_count_writes_xspress_streams_to_tiled(tmp_path):
     run_engine = RunEngine({}, loop=event_loop)
     try:
         call_in_bluesky_event_loop(connect_and_seed(detector))
+        set_mock_value(detector.driver.array_callbacks, True)
 
-        def finish_acquisition(value):
+        async def forward_erase_frame():
+            if await detector.driver.array_callbacks.get_value() and await detector.hdf.capture.get_value():
+                captured = await detector.hdf.num_captured.get_value()
+                set_mock_value(detector.hdf.num_captured, captured + 1)
+
+        async def finish_acquisition(value):
             if value:
+                callbacks_enabled = await detector.driver.array_callbacks.get_value()
+                capture_enabled = await detector.hdf.capture.get_value()
+                captured = await detector.hdf.num_captured.get_value()
+                if callbacks_enabled and capture_enabled:
+                    if await detector.driver.erase_on_start.get_value():
+                        captured += 1
+                    captured += 1
                 loop = asyncio.get_running_loop()
 
                 def finish():
-                    set_mock_value(detector.hdf.num_captured, 1)
+                    set_mock_value(detector.hdf.num_captured, captured)
                     set_mock_value(detector.driver.detector_state, ADState.IDLE)
                     set_mock_value(detector.driver.acquire, False)
 
                 loop.call_soon(finish)
 
+        callback_on_mock_execute(detector.driver.erase, forward_erase_frame)
         callback_on_mock_put(detector.driver.acquire, finish_acquisition)
 
         with SimpleTiledServer(
