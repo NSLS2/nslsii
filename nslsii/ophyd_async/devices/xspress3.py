@@ -70,6 +70,13 @@ class Xspress3TriggerMode(SupersetEnum):
     TTL_INTERNAL = "TTL + Internal"
 
 
+class Xspress3RunFlags(StrictEnum):
+    """Data sources selected by the Xspress3 run-flags records."""
+
+    SCALERS_AND_HISTOGRAMS = "SCALERS & HIST"
+    PLAYBACK_SCALERS_AND_HISTOGRAMS = "PLAYB, SCALERS & HIST"
+
+
 class Xspress3LevelTriggerMode(StrictEnum):
     """IOC modes valid for externally level-triggered acquisition."""
 
@@ -77,6 +84,16 @@ class Xspress3LevelTriggerMode(StrictEnum):
     TTL_BOTH = "TTL Both"
     LVDS_VETO_ONLY = "LVDS Veto Only"
     LVDS_BOTH = "LVDS Both"
+
+
+class Xspress3RoiTimeSeriesControl(StrictEnum):
+    """Commands exposed by the ROIStat time-series control record."""
+
+    ERASE_AND_START = "Erase/Start"
+    START = "Start"
+    STOP = "Stop"
+    READ = "Read"
+    ERASE = "Erase"
 
 
 @dataclass
@@ -216,7 +233,7 @@ class Xspress3DriverIO(ADBaseIO):
     invert_veto: A[SignalRW[int], PvSuffix.rbv("INVERT_VETO")]
     debounce: A[SignalRW[int], PvSuffix.rbv("DEBOUNCE")]
     ctrl_dtc: A[SignalRW[bool], PvSuffix.rbv("CTRL_DTC")]
-    run_flags: A[SignalRW[int], PvSuffix.rbv("RUN_FLAGS")]
+    run_flags: A[SignalRW[Xspress3RunFlags], PvSuffix.rbv("RUN_FLAGS")]
     config_path: A[SignalRW[str], PvSuffix.rbv("CONFIG_PATH")]
     config_save_path: A[SignalRW[str], PvSuffix.rbv("CONFIG_SAVE_PATH")]
 
@@ -245,10 +262,10 @@ class Xspress3Sca(EpicsDevice):
 
 class _Xspress3RoiTimeSeriesIO(EpicsDevice):
     ts_acquiring: A[SignalRW[bool], PvSuffix("TSAcquiring")]
-    ts_read: A[SignalRW[bool], PvSuffix("TSRead")]
+    ts_read: A[SignalRW[int], PvSuffix("TSRead")]
     ts_num_points: A[SignalRW[int], PvSuffix("TSNumPoints")]
     ts_current_point: A[SignalR[int], PvSuffix("TSCurrentPoint")]
-    ts_control: A[SignalRW[bool], PvSuffix("TSControl")]
+    ts_control: A[SignalRW[Xspress3RoiTimeSeriesControl], PvSuffix("TSControl")]
     ts_scan_rate: A[SignalRW[str], PvSuffix("TSRead.SCAN")]
 
 
