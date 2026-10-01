@@ -78,8 +78,6 @@ async def connect_and_seed(
         (detector.driver.array_size_x, bins),
         (detector.driver.array_size_y, channels),
         (detector.driver.array_size_z, 0),
-        (detector.driver.data_type, ADBaseDataType.UINT32),
-        (detector.driver.color_mode, ADBaseColorMode.MONO),
         (detector.driver.detector_state, ADState.IDLE),
         (detector.hdf.file_path_exists, True),
         (detector.hdf.num_frames_chunks, 1),
@@ -463,6 +461,25 @@ async def test_all_data_views_describe_and_emit_advancing_stream_documents():
     second_docs = [document async for document in detector.collect_asset_docs()]
     assert {name for name, _ in second_docs} == {"stream_datum"}
     assert all(document["indices"] == {"start": 1, "stop": 2} for _, document in second_docs)
+    await detector.unstage()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("ctrl_dtc", "expected_dtype"),
+    [(False, np.uint32), (True, np.float64)],
+)
+async def test_stream_metadata_ignores_disabled_adbase_readbacks(ctrl_dtc, expected_dtype):
+    detector = make_detector()
+    await connect_and_seed(detector)
+    set_mock_value(detector.driver.data_type, ADBaseDataType.INT8)
+    set_mock_value(detector.driver.color_mode, ADBaseColorMode.RGB1)
+    set_mock_value(detector.driver.ctrl_dtc, ctrl_dtc)
+
+    await detector.prepare(TriggerInfo())
+
+    description = await detector.describe()
+    assert description["xs"]["dtype_numpy"] == np.dtype(expected_dtype).str
     await detector.unstage()
 
 

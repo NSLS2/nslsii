@@ -30,8 +30,6 @@ from ophyd_async.core import (
 )
 from ophyd_async.epics.adcore import (
     ADAcquireLogic,
-    ADBaseColorMode,
-    ADBaseDataType,
     ADBaseIO,
     ADHDFDataLogic,
     ADWriterFactory,
@@ -476,28 +474,22 @@ class Xspress3HDFDataLogic(DetectorDataLogic):
         )
 
     async def _read_array_metadata(self) -> tuple[tuple[int, int], str]:
-        size_z, size_y, size_x, data_type, color_mode = await asyncio.gather(
+        size_z, size_y, size_x, ctrl_dtc = await asyncio.gather(
             self.driver.array_size_z.get_value(),
             self.driver.array_size_y.get_value(),
             self.driver.array_size_x.get_value(),
-            self.driver.data_type.get_value(),
-            self.driver.color_mode.get_value(),
+            self.driver.ctrl_dtc.get_value(),
         )
         shape = tuple(size for size in (size_z, size_y, size_x) if size > 0)
         highest_channel = max(self.channel_numbers, default=0)
-        metadata_error = (
-            len(shape) != 2
-            or shape[0] < highest_channel
-            or data_type is ADBaseDataType.UNDEFINED
-            or color_mode is not ADBaseColorMode.MONO
-        )
-        if metadata_error:
+        if len(shape) != 2 or shape[0] < highest_channel:
             raise ValueError(
                 "Xspress3 array metadata must describe a nonempty two-dimensional "
-                "Mono (channels, bins) frame containing every requested channel; "
+                "(channels, bins) frame containing every requested channel; "
                 "call warmup() first"
             )
-        return (shape[0], shape[1]), np.dtype(data_type.value.lower()).str
+        frame_dtype = np.dtype(np.float64 if ctrl_dtc else np.uint32).str
+        return (shape[0], shape[1]), frame_dtype
 
     @staticmethod
     def _ndattribute_resource(data_key: str, attribute_name: str) -> StreamResourceInfo:
