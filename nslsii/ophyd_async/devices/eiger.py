@@ -159,7 +159,6 @@ class EigerDriverIO(ADBaseIO, NDFileIO):
     dead_time: A[SignalR[float], PvSuffix("DeadTime_RBV")]
 
     # Detector Status
-    restart: A[SignalRW[bool], PvSuffix("Restart")]
     initialize: A[SignalRW[bool], PvSuffix("Initialize")]
     state: A[SignalR[str], PvSuffix("State_RBV")]
     error: A[SignalR[str], PvSuffix("Error_RBV")]
@@ -183,7 +182,6 @@ class EigerDriverIO(ADBaseIO, NDFileIO):
     auto_summation: A[SignalRW[bool], PvSuffix.rbv("AutoSummation")]
     compression_algo: A[SignalRW[EigerCompressionAlgo], PvSuffix.rbv("CompressionAlgo")]
     data_source: A[SignalRW[EigerDataSource], PvSuffix.rbv("DataSource")]
-    signed_data: A[SignalRW[bool], PvSuffix.rbv("SignedData")]
 
     # Acquisition Status
     armed: A[SignalR[bool], PvSuffix("Armed")]
@@ -285,13 +283,6 @@ class Eiger2DriverIO(EigerDriverIO):
     # Trigger Setup
     ext_gate_mode: A[SignalRW[EigerExtGateMode], PvSuffix.rbv("ExtGateMode")]
     trigger_start_delay: A[SignalRW[float], PvSuffix.rbv("TriggerStartDelay")]
-
-    # Stream Interface
-    stream_version: A[SignalRW[EigerStreamVersion], PvSuffix.rbv("StreamVersion")]
-    stream_as_ts_source: A[SignalRW[bool], PvSuffix.rbv("StreamAsTSSource")]
-
-    # FileWriter Interface
-    fw_hdf5_format: A[SignalRW[EigerHDF5Format], PvSuffix.rbv("FWHDF5Format")]
 
 
 class Pilatus4DriverIO(Eiger2DriverIO):
