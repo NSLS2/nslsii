@@ -132,11 +132,11 @@ class EigerStreamHdrDetail(StrictEnum):
     NONE = "None"
 
 
-def _image_data_type(bit_depth: int, signed: bool) -> ADBaseDataType:
+def _image_data_type(bit_depth: int) -> ADBaseDataType:
     # Same switch as eigerDetector.cpp when it builds NDArrays from the FileWriter/Stream data
     if bit_depth not in (8, 16, 32):
         raise ValueError(f"Unexpected Eiger bit depth {bit_depth}")
-    return ADBaseDataType(f"{'' if signed else 'U'}Int{bit_depth}")
+    return ADBaseDataType(f"UInt{bit_depth}")
 
 
 class EigerDriverIO(ADBaseIO, NDFileIO):
@@ -249,7 +249,7 @@ class EigerDriverIO(ADBaseIO, NDFileIO):
         # DataType_RBV and ColorMode_RBV are disabled in the template; derive them instead so
         # plugin writers describe the NDArrays correctly.
         self.data_type = derived_signal_r(
-            _image_data_type, bit_depth=self.bit_depth_image, signed=self.signed_data
+            _image_data_type, bit_depth=self.bit_depth_image
         )
         self.color_mode, _ = soft_signal_r_and_setter(ADBaseColorMode, ADBaseColorMode.MONO)
 
