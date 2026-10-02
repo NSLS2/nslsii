@@ -36,7 +36,6 @@ class FakeEigerIOC:
         self.triggers = 0
         self._tasks: list[asyncio.Task] = []
         set_mock_value(driver.bit_depth_image, 16)
-        set_mock_value(driver.signed_data, False)
         set_mock_value(driver.array_size_y, frame_shape[0])
         set_mock_value(driver.array_size_x, frame_shape[1])
         set_mock_value(driver.dead_time, 3e-6)

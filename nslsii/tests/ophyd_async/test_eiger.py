@@ -16,7 +16,6 @@ from nslsii.ophyd_async.devices import (
     Eiger2DriverIO,
     EigerDataSource,
     EigerDetector,
-    EigerHDF5Format,
     EigerTriggerMode,
     Pilatus4DriverIO,
 )
@@ -110,7 +109,6 @@ async def test_filewriter_step_scan_single_series(path_provider, fake_ioc):
     assert await driver.fw_enable.get_value() is True
     assert await driver.save_files.get_value() is True
     assert puts(driver.fw_auto_remove) == []
-    assert await driver.fw_hdf5_format.get_value() == EigerHDF5Format.LEGACY
     assert await driver.array_counter.get_value() == 0
     assert await driver.fw_nimgs_per_file.get_value() == 2
     datakey = (await det.describe())["det"]
@@ -244,15 +242,14 @@ async def test_plugin_writer_step_scan(path_provider, fake_ioc, tmp_path):
 
 
 @pytest.mark.parametrize("driver_cls", [Eiger1DriverIO, Eiger2DriverIO, Pilatus4DriverIO])
-async def test_plugin_writer_uses_eiger_dtype(path_provider, fake_ioc, driver_cls):
+async def test_plugin_writer_uses_unsigned_eiger_dtype(path_provider, fake_ioc, driver_cls):
     async with init_devices(mock=True):
         det = EigerDetector("X:", ADWriterFactory.hdf(path_provider), driver_cls=driver_cls, name="det")
     fake_ioc(det.driver, hdf=det.hdf)
     set_mock_value(det.driver.bit_depth_image, 32)
-    set_mock_value(det.driver.signed_data, True)
     await det.stage()
     await det.prepare(TriggerInfo())
-    assert (await det.describe())["det"]["dtype_numpy"] == "<i4"
+    assert (await det.describe())["det"]["dtype_numpy"] == "<u4"
 
 
 async def test_plugin_writer_datakey_collision(path_provider, fake_ioc):

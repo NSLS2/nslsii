@@ -4,6 +4,9 @@ See https://areadetector.github.io/areaDetector/ADEiger/eiger.html. The detector
 per scan; internally triggered points are software triggers into that series. Data is stored
 either by the IOC's HDF5 plugin fed from the DCU stream (recommended) or as the DCU FileWriter
 files saved by the IOC; see `EigerDetector`.
+
+The signal classes target the released ADEiger R3-5 record set. Records added after R3-5 must
+live in a version-specific subclass so that released IOCs can still connect.
 """
 
 from __future__ import annotations
@@ -108,20 +111,6 @@ class EigerDataSource(StrictEnum):
     NONE = "None"
     FILE_WRITER = "FileWriter"
     STREAM = "Stream"
-
-
-class EigerHDF5Format(StrictEnum):
-    """``FWHDF5Format`` choices (Eiger2)."""
-
-    LEGACY = "Legacy"
-    V2024_2 = "v2024.2"
-
-
-class EigerStreamVersion(StrictEnum):
-    """``StreamVersion`` choices (Eiger2)."""
-
-    STREAM1 = "Stream"
-    STREAM2 = "Stream2"
 
 
 class EigerStreamHdrDetail(StrictEnum):
@@ -246,11 +235,9 @@ class EigerDriverIO(ADBaseIO, NDFileIO):
         connector: DeviceConnector | None = None,
     ) -> None:
         super().__init__(prefix, with_pvi, name, connector)
-        # DataType_RBV and ColorMode_RBV are disabled in the template; derive them instead so
-        # plugin writers describe the NDArrays correctly.
-        self.data_type = derived_signal_r(
-            _image_data_type, bit_depth=self.bit_depth_image
-        )
+        # DataType_RBV and ColorMode_RBV are disabled in the R3-5 templates, and R3-5 has no
+        # SignedData record. Derive the unsigned image dtype so plugin writers describe it correctly.
+        self.data_type = derived_signal_r(_image_data_type, bit_depth=self.bit_depth_image)
         self.color_mode, _ = soft_signal_r_and_setter(ADBaseColorMode, ADBaseColorMode.MONO)
 
 
@@ -614,9 +601,6 @@ class EigerFileWriterDataLogic(DetectorDataLogic):
             # StandardDetector counts from the raw ArrayCounter and the driver never resets it
             driver.array_counter.set(0),
         ]
-        if isinstance(driver, Eiger2DriverIO):
-            # Only the Legacy layout has a 3-D /entry/data/data
-            coros.append(driver.fw_hdf5_format.set(EigerHDF5Format.LEGACY))
         await asyncio.gather(*coros)
         if not await driver.file_path_exists.get_value():
             raise FileNotFoundError(f"Path {directory} doesn't exist or not writable!")
@@ -625,7 +609,7 @@ class EigerFileWriterDataLogic(DetectorDataLogic):
             driver.array_size_y.get_value(),
             driver.array_size_x.get_value(),
         )
-        # DCU files are always unsigned; SignedData only affects the IOC's NDArrays
+        # DCU files are always unsigned.
         resource = StreamResourceInfo(
             data_key=datakey_name,
             shape=(ny, nx),
