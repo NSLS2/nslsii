@@ -1,9 +1,13 @@
 import time
 
 import pytest
-from ophyd_async.core import get_mock_put, init_devices, set_mock_value
+from ophyd_async.core import LazyMock, get_mock_put, init_devices, set_mock_value
 
-from nslsii.ophyd_async.devices import Eurotherm3k, Eurotherm3kControlMode
+from nslsii.ophyd_async.devices import (
+    Eurotherm3k,
+    Eurotherm3kControlMode,
+    Eurotherm3kLoop,
+)
 
 PREFIX = "XF:28ID1-ES{ET:05}"
 
@@ -27,8 +31,8 @@ async def test_format_tags_route_signals():
     reading = await dev.read()
     config = await dev.read_configuration()
     # HINTED readbacks (merged from both loop CHILDren) appear in read()
-    assert "et-loop1-readback" in reading
-    assert "et-loop2-readback" in reading
+    assert "et-loop1" in reading
+    assert "et-loop2" in reading
     # CONFIG signals appear in read_configuration()
     assert "et-loop1-ramp_rate" in config
 
@@ -45,44 +49,41 @@ async def test_control_mode_enum_roundtrip():
 async def test_set_commands_setpoint_and_settles():
     async with init_devices(mock=True):
         dev = Eurotherm3k(PREFIX, name="et")
-    dev.loop1.tolerance = 1.0
-    dev.loop1.settle_time = 0.0
-    # pretend the controller is already at temperature
-    set_mock_value(dev.loop1.readback, 300.0)
-    await dev.loop1.set(300.0)  # returns => it settled
-    # it wrote the commanded setpoint (not just "something")
+    await dev.loop1.set(300.0)
     get_mock_put(dev.loop1.setpoint).assert_called_once_with(300.0)
+    location = await dev.loop1.locate()
+    assert location["setpoint"] == 300.0
+    assert location["readback"] == 300.0
 
 
 @pytest.mark.asyncio
 async def test_set_holds_in_band_for_settle_time():
     """With settle_time > 0, set() waits the hold time even if the readback is
     already in band and stops updating -- and must not block until move_timeout."""
-    async with init_devices(mock=True):
-        dev = Eurotherm3k(PREFIX, name="et")
-    dev.loop1.tolerance = 1.0
-    dev.loop1.settle_time = 0.2
-    dev.loop1.move_timeout = 5.0
+    loop = Eurotherm3kLoop(f"{PREFIX}LOOP1:", name="et-loop1")
+    await loop.connect(mock=LazyMock())
+    loop.tolerance = 1.0
+    loop.settle_time = 0.2
+    loop.move_timeout = 5.0
     # already in band and stable (no further updates arrive)
-    set_mock_value(dev.loop1.readback, 300.0)
+    set_mock_value(loop.readback, 300.0)
     start = time.monotonic()
-    await dev.loop1.set(300.0)
+    await loop.set(300.0)
     elapsed = time.monotonic() - start
     # waited ~settle_time, and crucially did NOT hang until move_timeout
-    assert elapsed >= 0.2
-    assert elapsed < dev.loop1.move_timeout
-    get_mock_put(dev.loop1.setpoint).assert_called_once_with(300.0)
+    assert 0.2 <= elapsed < 5.0
+    get_mock_put(loop.setpoint).assert_called_once_with(300.0)
 
 
 @pytest.mark.asyncio
 async def test_set_times_out_if_never_in_band():
-    async with init_devices(mock=True):
-        dev = Eurotherm3k(PREFIX, name="et")
-    dev.loop1.tolerance = 0.5
-    dev.loop1.move_timeout = 0.3  # keep the test fast
-    set_mock_value(dev.loop1.readback, 0.0)  # stays far from 300
+    loop = Eurotherm3kLoop(f"{PREFIX}LOOP1:", name="et-loop1")
+    await loop.connect(mock=LazyMock())
+    loop.tolerance = 0.5
+    loop.move_timeout = 0.3  # keep the test fast
+    set_mock_value(loop.readback, 0.0)  # stays far from 300
     with pytest.raises(TimeoutError):
-        await dev.loop1.set(300.0)
+        await loop.set(300.0)
 
 
 # Legacy PDF eurotherm3k (pdf-profile-collection/startup/16-eurotherm_HAB.py):
