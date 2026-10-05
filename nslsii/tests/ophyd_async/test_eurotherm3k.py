@@ -1,7 +1,14 @@
+import asyncio
 import time
 
 import pytest
-from ophyd_async.core import LazyMock, get_mock_put, init_devices, set_mock_value
+from ophyd_async.core import (
+    LazyMock,
+    callback_on_mock_put,
+    get_mock_put,
+    init_devices,
+    set_mock_value,
+)
 
 from nslsii.ophyd_async.devices import (
     Eurotherm3k,
@@ -72,6 +79,37 @@ async def test_set_holds_in_band_for_settle_time():
     elapsed = time.monotonic() - start
     # waited ~settle_time, and crucially did NOT hang until move_timeout
     assert 0.2 <= elapsed < 5.0
+    get_mock_put(loop.setpoint).assert_called_once_with(300.0)
+
+
+@pytest.mark.asyncio
+async def test_set_restarts_settle_time_after_out_of_band_excursion():
+    loop = Eurotherm3kLoop(f"{PREFIX}LOOP1:", name="et-loop1")
+    await loop.connect(mock=LazyMock())
+    loop.tolerance = 1.0
+    loop.settle_time = 0.2
+    loop.move_timeout = 5.0
+    set_mock_value(loop.readback, 300.0)
+
+    async def make_excursion() -> None:
+        await asyncio.sleep(loop.settle_time / 2)
+        set_mock_value(loop.readback, 0.0)
+        await asyncio.sleep(0)
+        set_mock_value(loop.readback, 300.0)
+
+    excursion_task: asyncio.Task[None] | None = None
+
+    def start_excursion(value: float) -> None:
+        nonlocal excursion_task
+        excursion_task = asyncio.create_task(make_excursion())
+
+    callback_on_mock_put(loop.setpoint, start_excursion)
+    start = time.monotonic()
+    await loop.set(300.0)
+    elapsed = time.monotonic() - start
+    assert excursion_task is not None
+    await excursion_task
+    assert 0.3 <= elapsed < 5.0
     get_mock_put(loop.setpoint).assert_called_once_with(300.0)
 
 
