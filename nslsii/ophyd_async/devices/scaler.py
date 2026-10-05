@@ -2,11 +2,6 @@
 Struck SIS3820 multi-channel-scaler (MCS) and SIS calc-record extensions used
 to build it into a fly-scan buffer.
 
-Consolidates the following nearly-identical beamline implementations into one
-configurable device: CSX/TES/XFM `Scaler`+`FixedScalerCH`+`ScalerMCA`, SRX
-`SRXScaler`, FXI `FXIScaler`, IOS `DodgyEpicsScaler`, and HXN
-`StruckScaler`/`HxnTriggeringScaler` (github.com/NSLS-II-HXN/hxntools).
-
 https://github.com/epics-modules/scaler
 """
 
@@ -84,14 +79,6 @@ class ScalerChannelAdvance(StrictEnum):
 class ScalerChannel(StandardReadable):
     """One numbered channel (`.Sn`/`.NMn`/`.PRn`/`.Gn`) of a scaler record.
 
-    `value` is read with `Format.UNCACHED_SIGNAL` (or `HINTED_UNCACHED_SIGNAL`
-    if `hinted=True`): every `read()` does an explicit, uncached get rather
-    than relying on a cached monitor value. Combined with `Scaler.trigger()`
-    only completing once counting has actually finished (see below), this
-    removes the race that motivated the classic `EpicsSignalROLazyier`/
-    `DodgyEpicsSignal` retry-on-`None` subclasses: there is no longer a window
-    where a stale/absent value can be read back.
-
     Parameters
     ----------
     prefix : str
@@ -125,10 +112,6 @@ class ScalerChannel(StandardReadable):
 class ScalerCalculation(StandardReadable):
     """One `{prefix}_calcN` SIS scaler calc-record (the "SIS extension").
 
-    Matches HXN's `hxntools.struck_scaler.EpicsScalerWithCalc`/
-    `MinimalCalcRecord`: 8 calc records (`_calc1`..`_calc8`), each with a
-    `.VAL` readback and a `.CALC$` equation string.
-
     Parameters
     ----------
     prefix : str
@@ -156,7 +139,7 @@ class ScalerCalculation(StandardReadable):
 
 
 class ScalerMCSFlyInfo(ConfinedModel):
-    """Info for a `ScalerMCS` fly scan, passed to `bps.prepare(scaler.mcs, ...)`."""
+    """Info for a `ScalerMCS` fly scan, passed to `bps.prepare(scaler_mcs, ...)`."""
 
     number_of_points: NonNegativeInt = Field(
         description="number of external channel-advance pulses to buffer"
@@ -173,15 +156,7 @@ class ScalerMCSFlyInfo(ConfinedModel):
 
 @dataclass
 class ScalerMCSFlyableLogic(FlyableLogic[ScalerMCSFlyInfo, None]):
-    """Fly-control logic for a `ScalerMCS`, backing its `flyable_logic`.
-
-    Mirrors the PandA `StaticSeqTableFlyableLogic`/`StaticPcompFlyableLogic`
-    (`ophyd_async.fastcs.panda._fly_logic`): a plain `@dataclass` holding the
-    signals it drives, carrying no state between `on_prepare`/`on_kickoff`/
-    `on_complete` (hence `FlyableLogic[ScalerMCSFlyInfo, None]`) since
-    `StandardFlyable` threads the prepare -> kickoff -> complete context and
-    enforces call ordering for us.
-    """
+    """Fly-control logic for a `ScalerMCS`, backing its `flyable_logic`."""
 
     channel_advance: SignalRW[ScalerChannelAdvance]
     nuse_all: SignalRW[int]
@@ -215,36 +190,7 @@ class ScalerMCS(StandardFlyable[ScalerMCSFlyInfo, None], StandardReadable):
 
     Instead of one scalar per `trigger()`, the MCS accumulates one reading per
     hardware channel-advance pulse into a per-channel waveform ("mcaN"),
-    paced externally (e.g. by a zebra or encoder) rather than by `.CNT`. This
-    is the "MCA fly buffer" mode used by SRX/FXI/HXN fly scans and replaces
-    HXN's `HxnTriggeringScaler`/`HxnModalBase` internal-vs-external mode
-    switch.
-
-    `ScalerMCS` is always a flyer: it mixes in `StandardFlyable` directly
-    (the same pattern `ophyd_async.epics.motor.Motor` uses), so a plan drives
-    it with the ordinary `Preparable`/`Flyable` plan stubs --
-    `bps.prepare(scaler.mcs, ScalerMCSFlyInfo(...))`, `bps.kickoff(scaler.mcs)`,
-    `bps.complete(scaler.mcs)` -- with no separate flyer object to construct.
-    The actual arm/kickoff/complete sequence lives in `ScalerMCSFlyableLogic`,
-    a plain signal-holding logic object (not the device itself), matching how
-    `Motor`/`MotorFlyableMovableLogic` keep device and logic separate.
-
-    `buffers` are read directly (`await scaler.mcs.buffers[n].get_value()`)
-    after `bps.complete(scaler.mcs)` returns, not through `read()`/
-    `describe()`: they hold one fly-scan's worth of samples, not a
-    single-point reading, matching how every fetched beamline implementation
-    already consumes them (a bulk `.get()` after the external scan finishes,
-    not a per-event callback). There is no `StandardDetector`/`DetectorDataLogic`
-    backing these buffers: no fetched beamline implementation streams them
-    through a bluesky-managed persistent writer (SRX exports them via a
-    bespoke `ZebraSaver` caproto IOC entirely outside of ophyd), and
-    `StandardDetector.kickoff()` hard-requires at least one streamable
-    `DetectorDataLogic` provider (`ophyd_async.core._detector.StandardDetector.kickoff`,
-    raises `ValueError` otherwise) -- every first-party streamable
-    `DetectorDataLogic` in ophyd-async 0.21.3 is HDF/TIFF/ODIN file-writer
-    backed, so forcing this extension through `StandardDetector` would mean
-    inventing a fake streaming data logic with no real consumer, which is
-    more complexity than the flyer approach, not less.
+    paced externally (e.g. by a zebra or encoder). `ScalerMCS` is always a flyer.
 
     Parameters
     ----------
@@ -253,28 +199,11 @@ class ScalerMCS(StandardFlyable[ScalerMCSFlyInfo, None], StandardReadable):
     num_channels : int, default 32
         How many of the 32 hardware MCS buffer channels to connect.
     mca_suffix : callable(int) -> str, default ``lambda i: f"mca{i}"``
-        Per-channel PV suffix template. Sites differ: CSX/TES use zero-padded
-        ``mca{01..20}``, SRX/FXI use unpadded ``mca{1..32}``, HXN uses
-        ``Mca:{1..32}`` (colon). Default matches SRX/FXI.
+        Per-channel PV suffix template. Sites differ: some use zero-padded
+        ``mca{01..20}``, others use unpadded ``mca{1..32}``, still others use
+        ``Mca:{1..32}`` (colon).
     name : str, default ""
         Name of the device.
-
-    Notes
-    -----
-    Several MCS fields are typed `str` rather than a `StrictEnum` because
-    their exact mbbo/mbbi state tables could not be confirmed from any
-    fetched beamline source (only `ChannelAdvance`'s "Internal"/"External"
-    and `CountOnStart`'s "Yes" are confirmed literal values actually put to
-    the PV in the fetched sources) -- unverified, confirm against the SIS3820
-    MCS IOC `.dbd`/template before narrowing these to a `StrictEnum`.
-
-    The following fields declared on `StruckScaler`/`SRXScaler`/`FXIScaler`
-    are deliberately omitted: `asyn`, `client_wait`, `enable_client_wait`,
-    `set_client_wait`, `snl_connected`, `user_led`, `wfrm`, `mux_output`,
-    `do_read_all`, `read_all`, `read_all_once`, `set_acquiring`. None of these
-    are referenced anywhere outside their bare declaration in any of the 6
-    fetched beamline implementations (SNL-sequencer/vendor-diagnostic
-    plumbing); add one if a site needs it.
     """
 
     def __init__(
@@ -339,10 +268,8 @@ class ScalerMCS(StandardFlyable[ScalerMCSFlyInfo, None], StandardReadable):
 class Scaler(StandardReadable, EpicsDevice, Triggerable):
     """SynApps scaler record (`scalerRecord`), e.g. a Struck SIS3820 VME scaler.
 
-    Covers plain step-scan counting (`trigger()`), the optional SIS
-    calc-record extension (`num_calculations`), and the optional SIS3820 MCS
-    fly-buffer extension (`with_mcs`, exposed as `self.mcs`; `self.mcs` is
-    itself `Preparable`/`Flyable`, see `ScalerMCS`).
+    Covers plain step-scan counting (`trigger()`) and the optional SIS
+    calc-record extension (`num_calculations`). 
 
     Parameters
     ----------
@@ -351,38 +278,15 @@ class Scaler(StandardReadable, EpicsDevice, Triggerable):
     num_channels : int, default 32
         How many of the 32 hardware channels to connect.
     hinted_channels : sequence of int, default ()
-        1-indexed channel numbers to flag hinted (shown in the default
-        LiveTable/LivePlot); all `num_channels` channels are always connected
-        and included in `read()`/`describe()` regardless.
+        1-indexed channel numbers to flag hinted; all `num_channels` channels are
+        always connected and included in `read()`/`describe()` regardless.
     num_calculations : int, default 0
         How many of the 8 SIS calc records to connect (0 disables the
-        extension entirely; HXN uses 8).
+        extension entirely).
     hinted_calculations : sequence of int, default ()
         1-indexed calc numbers to flag hinted.
-    with_mcs : bool, default False
-        Attach the SIS3820 MCS fly-buffer extension as `self.mcs`
-        (`ScalerMCS`).
-    mca_suffix : callable(int) -> str, default ``lambda i: f"mca{i}"``
-        Per-channel MCS waveform PV suffix template, see `ScalerMCS`.
     name : str, default ""
         Name of the device.
-
-    Notes
-    -----
-    Per-scan dynamic channel-count changes (SRX's classic `set_num_channels`)
-    are not reproduced: `num_channels`/`hinted_channels` are fixed at
-    construction, matching how every other ophyd-async device (e.g.
-    `ophyd_async.epics.motor.Motor`) exposes a static, connect-time-defined
-    `read()`/`describe()` schema. A site that needs a different active
-    channel count for different experiments should construct a `Scaler` with
-    the channel set it needs.
-
-    `self.mcs` is a plain attribute, not added via
-    `add_children_as_readables()`: it is deliberately excluded from
-    `Scaler`'s own `read()`/`read_configuration()` and from the `stage()`/
-    `unstage()` cascade (`Scaler.stage()` never arms/disarms the MCS). A plan
-    that wants to fly stages `scaler.mcs` itself, the same way it would stage
-    any other `Flyable` participant in the scan.
     """
 
     count: A[SignalRW[int], PvSuffix(".CNT")]
@@ -404,8 +308,6 @@ class Scaler(StandardReadable, EpicsDevice, Triggerable):
         hinted_channels: Sequence[int] = (),
         num_calculations: int = 0,
         hinted_calculations: Sequence[int] = (),
-        with_mcs: bool = False,
-        mca_suffix: Callable[[int], str] = lambda i: f"mca{i}",
         name: str = "",
     ) -> None:
         with self.add_children_as_readables():
@@ -429,8 +331,6 @@ class Scaler(StandardReadable, EpicsDevice, Triggerable):
                 self.enable_calculations = epics_signal_rw(
                     bool, f"{prefix}_calcEnable"
                 )
-        if with_mcs:
-            self.mcs = ScalerMCS(prefix, num_channels=num_channels, mca_suffix=mca_suffix)
         super().__init__(prefix=prefix, name=name)
 
     @AsyncStatus.wrap

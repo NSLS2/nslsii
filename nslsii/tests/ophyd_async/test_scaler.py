@@ -33,9 +33,15 @@ async def scaler():
             hinted_channels=(2,),
             num_calculations=2,
             hinted_calculations=(1,),
-            with_mcs=True,
         )
     return scaler
+
+
+@pytest_asyncio.fixture
+async def mcs():
+    async with init_devices(mock=True):
+        mcs = ScalerMCS("XF:99ID-ES{Sclr:1}", num_channels=4)
+    return mcs
 
 
 @pytest.mark.asyncio
@@ -105,25 +111,25 @@ async def test_calculations_wired_when_requested(scaler):
 
 
 @pytest.mark.asyncio
-async def test_mcs_prepare_arms_external_advance(scaler):
-    await scaler.mcs.prepare(ScalerMCSFlyInfo(number_of_points=10, dwell_time=0.01))
-    await assert_value(scaler.mcs.channel_advance, ScalerChannelAdvance.EXTERNAL)
-    await assert_value(scaler.mcs.nuse_all, 10)
-    await assert_value(scaler.mcs.dwell, 0.01)
+async def test_mcs_prepare_arms_external_advance(mcs):
+    await mcs.prepare(ScalerMCSFlyInfo(number_of_points=10, dwell_time=0.01))
+    await assert_value(mcs.channel_advance, ScalerChannelAdvance.EXTERNAL)
+    await assert_value(mcs.nuse_all, 10)
+    await assert_value(mcs.dwell, 0.01)
 
 
 @pytest.mark.asyncio
-async def test_mcs_kickoff_confirms_acquiring_and_complete_waits(scaler):
+async def test_mcs_kickoff_confirms_acquiring_and_complete_waits(mcs):
     def _start_acquiring():
-        set_mock_value(scaler.mcs.acquiring, True)
+        set_mock_value(mcs.acquiring, True)
 
-    callback_on_mock_execute(scaler.mcs.erase_start, _start_acquiring)
-    await scaler.mcs.prepare(ScalerMCSFlyInfo(number_of_points=10))
-    await scaler.mcs.kickoff()
-    await assert_value(scaler.mcs.acquiring, True)
+    callback_on_mock_execute(mcs.erase_start, _start_acquiring)
+    await mcs.prepare(ScalerMCSFlyInfo(number_of_points=10))
+    await mcs.kickoff()
+    await assert_value(mcs.acquiring, True)
 
-    set_mock_value(scaler.mcs.acquiring, False)
-    await scaler.mcs.complete()
+    set_mock_value(mcs.acquiring, False)
+    await mcs.complete()
 
 
 def test_mcs_custom_mca_suffix():
