@@ -2,7 +2,6 @@ import pytest
 import pytest_asyncio
 
 from ophyd_async.core import (
-    callback_on_mock_execute,
     callback_on_mock_put,
     get_mock_put,
     init_devices,
@@ -17,10 +16,7 @@ from ophyd_async.testing import (
 
 from nslsii.ophyd_async.devices import (
     Scaler,
-    ScalerChannelAdvance,
     ScalerCountMode,
-    ScalerMCS,
-    ScalerMCSFlyInfo,
 )
 
 
@@ -35,13 +31,6 @@ async def scaler():
             hinted_calculations=(1,),
         )
     return scaler
-
-
-@pytest_asyncio.fixture
-async def mcs():
-    async with init_devices(mock=True):
-        mcs = ScalerMCS("XF:99ID-ES{Sclr:1}", num_channels=4)
-    return mcs
 
 
 @pytest.mark.asyncio
@@ -108,31 +97,3 @@ async def test_calculations_wired_when_requested(scaler):
         {f"{scaler.name}-calculations-1-value": partial_reading(1.5)},
         full_match=False,
     )
-
-
-@pytest.mark.asyncio
-async def test_mcs_prepare_arms_external_advance(mcs):
-    await mcs.prepare(ScalerMCSFlyInfo(number_of_points=10, dwell_time=0.01))
-    await assert_value(mcs.channel_advance, ScalerChannelAdvance.EXTERNAL)
-    await assert_value(mcs.nuse_all, 10)
-    await assert_value(mcs.dwell, 0.01)
-
-
-@pytest.mark.asyncio
-async def test_mcs_kickoff_confirms_acquiring_and_complete_waits(mcs):
-    def _start_acquiring():
-        set_mock_value(mcs.acquiring, True)
-
-    callback_on_mock_execute(mcs.erase_start, _start_acquiring)
-    await mcs.prepare(ScalerMCSFlyInfo(number_of_points=10))
-    await mcs.kickoff()
-    await assert_value(mcs.acquiring, True)
-
-    set_mock_value(mcs.acquiring, False)
-    await mcs.complete()
-
-
-def test_mcs_custom_mca_suffix():
-    mcs = ScalerMCS("XF:99ID-ES{Sclr:2}", num_channels=2, mca_suffix=lambda i: f"Mca:{i}")
-    assert "Mca:1" in mcs.buffers[1].source
-    assert "Mca:2" in mcs.buffers[2].source

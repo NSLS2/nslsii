@@ -1,34 +1,24 @@
 """ophyd-async support for the SynApps scaler record (scalerRecord) and the
-Struck SIS3820 multi-channel-scaler (MCS) and SIS calc-record extensions used
-to build it into a fly-scan buffer.
+SIS calc-record extension.
 
 https://github.com/epics-modules/scaler
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass
-from functools import cached_property
+from collections.abc import Sequence
 from typing import Annotated as A
 
-import numpy as np
-from pydantic import Field, NonNegativeInt
+from bluesky.protocols import Triggerable
 
 from ophyd_async.core import (
     DEFAULT_TIMEOUT,
-    Array1D,
     AsyncStatus,
-    ConfinedModel,
     DeviceVector,
-    FlyableLogic,
     SignalR,
     SignalRW,
-    StandardFlyable,
     StrictEnum,
-    TriggerableCommand,
     set_and_wait_for_value,
-    wait_for_value,
 )
 from ophyd_async.core import StandardReadableFormat as Format
 from ophyd_async.core import StandardReadable
@@ -37,20 +27,13 @@ from ophyd_async.epics.core import (
     PvSuffix,
     epics_signal_r,
     epics_signal_rw,
-    epics_triggerable_command,
 )
-
-from bluesky.protocols import Triggerable
 
 __all__ = [
     "ScalerCountMode",
     "ScalerGate",
-    "ScalerChannelAdvance",
     "ScalerChannel",
     "ScalerCalculation",
-    "ScalerMCS",
-    "ScalerMCSFlyInfo",
-    "ScalerMCSFlyableLogic",
     "Scaler",
 ]
 
@@ -69,26 +52,17 @@ class ScalerGate(StrictEnum):
     YES = "Y"
 
 
-class ScalerChannelAdvance(StrictEnum):
-    """MCS `ChannelAdvance` field: what paces the multi-channel-scaler buffer."""
-
-    INTERNAL = "Internal"
-    EXTERNAL = "External"
-
-
 class ScalerChannel(StandardReadable):
     """One numbered channel (`.Sn`/`.NMn`/`.PRn`/`.Gn`) of a scaler record.
 
     Parameters
     ----------
     prefix : str
-        PV prefix of the parent scaler record, for example
-        ``"XF:99ID-ES{Sclr:1}"``.
+        PV prefix of the parent scaler record.
     ch_num : int
-        1-indexed scaler channel number, used to build the ``.Sn``/``.NMn``/
-        ``.PRn``/``.Gn`` suffixes.
+        1-indexed scaler channel number.
     hinted : bool, default False
-        If True, flag `value` as hinted (shown in the default LiveTable/LivePlot).
+        If True, flag `value` as hinted.
     name : str, default ""
         Name of the device.
     """
@@ -119,7 +93,7 @@ class ScalerCalculation(StandardReadable):
     calc_num : int
         1-indexed SIS calc record number (1-8).
     hinted : bool, default False
-        If True, flag `value` as hinted (shown in the default LiveTable/LivePlot).
+        If True, flag `value` as hinted.
     name : str, default ""
         Name of the device.
     """
@@ -138,138 +112,11 @@ class ScalerCalculation(StandardReadable):
         super().__init__(name=name)
 
 
-class ScalerMCSFlyInfo(ConfinedModel):
-    """Info for a `ScalerMCS` fly scan, passed to `bps.prepare(scaler_mcs, ...)`."""
-
-    number_of_points: NonNegativeInt = Field(
-        description="number of external channel-advance pulses to buffer"
-    )
-    dwell_time: float = Field(
-        default=0.0,
-        ge=0,
-        description=(
-            "fixed dwell time per point; 0.0 means paced entirely by the "
-            "external advance pulses rather than an internal timer"
-        ),
-    )
-
-
-@dataclass
-class ScalerMCSFlyableLogic(FlyableLogic[ScalerMCSFlyInfo, None]):
-    """Fly-control logic for a `ScalerMCS`, backing its `flyable_logic`."""
-
-    channel_advance: SignalRW[ScalerChannelAdvance]
-    nuse_all: SignalRW[int]
-    preset_real: SignalRW[float]
-    dwell: SignalRW[float]
-    erase_start: TriggerableCommand
-    stop_all: TriggerableCommand
-    acquiring: SignalR[bool]
-
-    async def on_prepare(self, value: ScalerMCSFlyInfo) -> None:
-        await self.stop_all.trigger()
-        await self.channel_advance.set(ScalerChannelAdvance.EXTERNAL)
-        await self.nuse_all.set(value.number_of_points)
-        await self.preset_real.set(0.0)
-        await self.dwell.set(value.dwell_time)
-
-    async def on_kickoff(self, ctx: None) -> None:
-        await self.erase_start.trigger()
-        await wait_for_value(self.acquiring, True, timeout=1)
-
-    async def on_complete(self, ctx: None) -> None:
-        await wait_for_value(self.acquiring, False, timeout=None)
-
-    async def stop(self) -> None:
-        await self.stop_all.trigger()
-        await wait_for_value(self.acquiring, False, timeout=1)
-
-
-class ScalerMCS(StandardFlyable[ScalerMCSFlyInfo, None], StandardReadable):
-    """Struck SIS3820 multi-channel-scaler (MCS) buffer/fly-mode extension.
-
-    Instead of one scalar per `trigger()`, the MCS accumulates one reading per
-    hardware channel-advance pulse into a per-channel waveform ("mcaN"),
-    paced externally (e.g. by a zebra or encoder). `ScalerMCS` is always a flyer.
-
-    Parameters
-    ----------
-    prefix : str
-        PV prefix of the parent scaler record.
-    num_channels : int, default 32
-        How many of the 32 hardware MCS buffer channels to connect.
-    mca_suffix : callable(int) -> str, default ``lambda i: f"mca{i}"``
-        Per-channel PV suffix template. Sites differ: some use zero-padded
-        ``mca{01..20}``, others use unpadded ``mca{1..32}``, still others use
-        ``Mca:{1..32}`` (colon).
-    name : str, default ""
-        Name of the device.
-    """
-
-    def __init__(
-        self,
-        prefix: str,
-        num_channels: int = 32,
-        mca_suffix: Callable[[int], str] = lambda i: f"mca{i}",
-        name: str = "",
-    ) -> None:
-        self.buffers = DeviceVector(
-            {
-                i: epics_signal_r(Array1D[np.float64], f"{prefix}{mca_suffix(i)}")
-                for i in range(1, num_channels + 1)
-            }
-        )
-        with self.add_children_as_readables(Format.CONFIG_SIGNAL):
-            self.acquire_mode = epics_signal_rw(str, f"{prefix}AcquireMode")
-            self.input_mode = epics_signal_rw(str, f"{prefix}InputMode")
-            self.output_mode = epics_signal_rw(str, f"{prefix}OutputMode")
-            self.output_polarity = epics_signal_rw(str, f"{prefix}OutputPolarity")
-            self.channel_advance = epics_signal_rw(
-                ScalerChannelAdvance, f"{prefix}ChannelAdvance"
-            )
-            self.nuse_all = epics_signal_rw(int, f"{prefix}NuseAll")
-            self.prescale = epics_signal_rw(float, f"{prefix}Prescale")
-            self.preset_real = epics_signal_rw(float, f"{prefix}PresetReal")
-            self.dwell = epics_signal_rw(float, f"{prefix}Dwell")
-            self.channel1_source = epics_signal_rw(str, f"{prefix}Channel1Source")
-            self.count_on_start = epics_signal_rw(str, f"{prefix}CountOnStart")
-            self.disable_auto_count = epics_signal_rw(
-                str, f"{prefix}DisableAutoCount"
-            )
-        self.acquiring = epics_signal_r(bool, f"{prefix}Acquiring")
-        self.hardware_acquiring = epics_signal_r(bool, f"{prefix}HardwareAcquiring")
-        self.current_channel = epics_signal_r(int, f"{prefix}CurrentChannel")
-        self.elapsed_real = epics_signal_r(float, f"{prefix}ElapsedReal")
-        self.max_channels = epics_signal_r(int, f"{prefix}MaxChannels")
-        self.model = epics_signal_r(str, f"{prefix}Model")
-        self.firmware = epics_signal_r(str, f"{prefix}Firmware")
-        self.software_channel_advance = epics_triggerable_command(
-            f"{prefix}SoftwareChannelAdvance"
-        )
-        self.start_all = epics_triggerable_command(f"{prefix}StartAll")
-        self.stop_all = epics_triggerable_command(f"{prefix}StopAll")
-        self.erase_all = epics_triggerable_command(f"{prefix}EraseAll")
-        self.erase_start = epics_triggerable_command(f"{prefix}EraseStart")
-        super().__init__(name=name)
-
-    @cached_property
-    def flyable_logic(self) -> ScalerMCSFlyableLogic:
-        return ScalerMCSFlyableLogic(
-            channel_advance=self.channel_advance,
-            nuse_all=self.nuse_all,
-            preset_real=self.preset_real,
-            dwell=self.dwell,
-            erase_start=self.erase_start,
-            stop_all=self.stop_all,
-            acquiring=self.acquiring,
-        )
-
-
 class Scaler(StandardReadable, EpicsDevice, Triggerable):
     """SynApps scaler record (`scalerRecord`), e.g. a Struck SIS3820 VME scaler.
 
     Covers plain step-scan counting (`trigger()`) and the optional SIS
-    calc-record extension (`num_calculations`). 
+    calc-record extension (`num_calculations`).
 
     Parameters
     ----------
@@ -278,11 +125,9 @@ class Scaler(StandardReadable, EpicsDevice, Triggerable):
     num_channels : int, default 32
         How many of the 32 hardware channels to connect.
     hinted_channels : sequence of int, default ()
-        1-indexed channel numbers to flag hinted; all `num_channels` channels are
-        always connected and included in `read()`/`describe()` regardless.
+        1-indexed channel numbers to flag hinted.
     num_calculations : int, default 0
-        How many of the 8 SIS calc records to connect (0 disables the
-        extension entirely).
+        How many of the 8 SIS calc records to connect (0 disables it).
     hinted_calculations : sequence of int, default ()
         1-indexed calc numbers to flag hinted.
     name : str, default ""
