@@ -118,7 +118,7 @@ def sync_experiment(
     api_key_active = get_api_key(apikey_redis_client, normalized_beamline, endstation)
     if api_key_active:
         set_api_key(apikey_redis_client, normalized_beamline, endstation, "")
-        tiled_context_revoke, username = create_tiled_context(
+        tiled_context_revoke, _ = create_tiled_context(
             normalized_beamline, endstation, api_key=api_key_active
         )
         try:
@@ -246,7 +246,7 @@ def unsync_experiment(
     api_key_active = get_api_key(apikey_redis_client, normalized_beamline, endstation)
     if api_key_active:
         set_api_key(apikey_redis_client, normalized_beamline, endstation, "")
-        tiled_context_revoke, username = create_tiled_context(
+        tiled_context_revoke, _ = create_tiled_context(
             normalized_beamline, endstation, api_key=api_key_active
         )
         try:
@@ -402,8 +402,9 @@ def create_tiled_context(
     Create a new Tiled context and authenticate.
 
     Loads the beamline Tiled profile, instantiates the new context,
-    selects an AuthN provider, attempts to retrieve tokens via password_grant,
-    then prints a confirmation message and authenticates the context.
+    selects an AuthN provider, attempts to retrieve tokens via
+    device_code_grant, then optionally prints a confirmation message
+    and authenticates the context.
 
     If an api key is provided, the context is returned with that api key
     attached, and further authentication is skipped.
@@ -422,7 +423,8 @@ def create_tiled_context(
     )
 
     if api_key:
-        return context
+        # the provider is not specified so no username is returned
+        return context, None
 
     providers = context.server_info.authentication.providers
     http_client = context.http_client
