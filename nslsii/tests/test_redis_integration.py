@@ -2,6 +2,7 @@
 
 from unittest.mock import MagicMock, patch, mock_open
 
+import httpx
 import pytest
 
 import sys
@@ -160,3 +161,80 @@ def test_switch_proposal_passes_redis_db(switch_mocks):
 
     call_kwargs = switch_mocks["open_redis_client"].call_args[1]
     assert call_kwargs["redis_db"] == 7
+
+
+def test_revoke_active_api_key_clears_unusable_key():
+    redis_client = MagicMock()
+    tiled_context = MagicMock()
+    request = httpx.Request("GET", "https://tiled.example/auth/apikey")
+    tiled_context.which_api_key.side_effect = httpx.HTTPStatusError(
+        "API key is no longer valid",
+        request=request,
+        response=httpx.Response(401, request=request),
+    )
+
+    with (
+        patch.object(_sync_mod, "get_api_key", return_value="expired-key"),
+        patch.object(
+            _sync_mod, "create_tiled_context", return_value=(tiled_context, None)
+        ),
+        patch.object(_sync_mod, "revoke_api_key") as mock_revoke_api_key,
+        patch.object(_sync_mod, "set_api_key") as mock_set_api_key,
+    ):
+        _sync_mod.revoke_active_api_key(redis_client, "smi", None)
+
+    mock_set_api_key.assert_called_once_with(redis_client, "smi", None, "")
+    mock_revoke_api_key.assert_not_called()
+    tiled_context.logout.assert_called_once_with()
+    tiled_context.close.assert_called_once_with()
+
+
+def test_revoke_active_api_key_retains_key_without_revoke_scope():
+    redis_client = MagicMock()
+    tiled_context = MagicMock()
+    request = httpx.Request("DELETE", "https://tiled.example/auth/apikey")
+    response = httpx.Response(401, request=request)
+    error = httpx.HTTPStatusError(
+        "Not enough permissions", request=request, response=response
+    )
+
+    with (
+        patch.object(_sync_mod, "get_api_key", return_value="under-scoped-key"),
+        patch.object(
+            _sync_mod, "create_tiled_context", return_value=(tiled_context, None)
+        ),
+        patch.object(_sync_mod, "revoke_api_key", side_effect=error),
+        patch.object(_sync_mod, "set_api_key") as mock_set_api_key,
+        pytest.raises(httpx.HTTPStatusError),
+    ):
+        _sync_mod.revoke_active_api_key(redis_client, "smi", None)
+
+    tiled_context.which_api_key.assert_called_once_with()
+    mock_set_api_key.assert_not_called()
+    tiled_context.logout.assert_called_once_with()
+    tiled_context.close.assert_called_once_with()
+
+
+def test_revoke_active_api_key_retains_key_on_server_error():
+    redis_client = MagicMock()
+    tiled_context = MagicMock()
+    request = httpx.Request("DELETE", "https://tiled.example/auth/apikey")
+    response = httpx.Response(503, request=request)
+    error = httpx.HTTPStatusError(
+        "Tiled is unavailable", request=request, response=response
+    )
+
+    with (
+        patch.object(_sync_mod, "get_api_key", return_value="active-key"),
+        patch.object(
+            _sync_mod, "create_tiled_context", return_value=(tiled_context, None)
+        ),
+        patch.object(_sync_mod, "revoke_api_key", side_effect=error),
+        patch.object(_sync_mod, "set_api_key") as mock_set_api_key,
+        pytest.raises(httpx.HTTPStatusError),
+    ):
+        _sync_mod.revoke_active_api_key(redis_client, "smi", None)
+
+    mock_set_api_key.assert_not_called()
+    tiled_context.logout.assert_called_once_with()
+    tiled_context.close.assert_called_once_with()

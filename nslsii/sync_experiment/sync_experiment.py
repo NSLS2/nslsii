@@ -72,7 +72,9 @@ def sync_experiment(
     beamline = beamline or env_beamline
     endstation = endstation or env_endstation
     proposal_ids = [str(proposal_id) for proposal_id in proposal_ids]
-    activate_proposal = activate_id or proposal_ids[0]
+    if not proposal_ids:
+        raise ValueError("At least one proposal ID must be provided.")
+    activate_proposal = activate_id if activate_id is not None else proposal_ids[0]
     activate_proposal = str(activate_proposal)
 
     if not beamline:
@@ -112,44 +114,25 @@ def sync_experiment(
 
     tiled_context, username = create_tiled_context(normalized_beamline, endstation)
 
-    data_sessions = {"pass-" + proposal_id for proposal_id in proposal_ids}
-    if not proposals_can_be_authorized(username, facility, beamline, data_sessions):
-        tiled_context.api_key = None
-        tiled_context.logout()
-        raise ValueError(
-            f"You do not have permissions to authorize all proposal IDs: {', '.join(proposal_ids)}"
-        )
     try:
+        data_sessions = {"pass-" + proposal_id for proposal_id in proposal_ids}
+        if not proposals_can_be_authorized(username, facility, beamline, data_sessions):
+            raise ValueError(
+                f"You do not have permissions to authorize all proposal IDs: {', '.join(proposal_ids)}"
+            )
         proposals = retrieve_proposals(facility, beamline, proposal_ids)
-    except Exception:
-        tiled_context.api_key = None
-        tiled_context.logout()
-        raise
-
-    api_key_active = get_api_key(apikey_redis_client, normalized_beamline, endstation)
-    if api_key_active:
-        set_api_key(apikey_redis_client, normalized_beamline, endstation, "")
-        tiled_context_revoke, _ = create_tiled_context(
-            normalized_beamline, endstation, api_key=api_key_active
+        revoke_active_api_key(
+            apikey_redis_client, normalized_beamline, endstation
         )
-        try:
-            revoke_api_key(tiled_context_revoke)
-        except Exception as e:
-            print(f"Revocation of existing API key may have failed: {e}")
-        finally:
-            tiled_context_revoke.api_key = None
-            tiled_context_revoke.logout()
-    try:
         api_key_info = create_api_key(tiled_context, data_sessions, normalized_beamline)
         api_key = api_key_info["secret"]
-    except Exception:
+        set_api_key(apikey_redis_client, normalized_beamline, endstation, api_key)
+    finally:
         tiled_context.api_key = None
-        tiled_context.logout()
-        raise
-    set_api_key(apikey_redis_client, normalized_beamline, endstation, api_key)
-
-    tiled_context.api_key = None
-    tiled_context.logout()
+        try:
+            tiled_context.logout()
+        finally:
+            tiled_context.close()
 
     redis_location = (
         f"{normalized_beamline}-{endstation}" if endstation else f"{normalized_beamline}"
@@ -286,19 +269,7 @@ def unsync_experiment(
     md_redis_prefix = f"{redis_location}-" if not redis_ssl else ""
     md = RedisJSONDict(redis_client=md_redis_client, prefix=md_redis_prefix)
 
-    api_key_active = get_api_key(apikey_redis_client, normalized_beamline, endstation)
-    if api_key_active:
-        set_api_key(apikey_redis_client, normalized_beamline, endstation, "")
-        tiled_context_revoke, _ = create_tiled_context(
-            normalized_beamline, endstation, api_key=api_key_active
-        )
-        try:
-            revoke_api_key(tiled_context_revoke)
-        except Exception as e:
-            print(f"Revocation of existing API key may have failed: {e}")
-        finally:
-            tiled_context_revoke.api_key = None
-            tiled_context_revoke.logout()
+    revoke_active_api_key(apikey_redis_client, normalized_beamline, endstation)
     data_sessions_deauthorized = md.get("data_sessions_authorized") or [
         "<no authorized data sessions>"
     ]
@@ -545,6 +516,49 @@ def revoke_api_key(tiled_context):
         raise ValueError("No API key attached to Tiled context. No API key to revoke.")
     first_eight = api_key[:8]
     tiled_context.revoke_api_key(first_eight)
+
+
+def revoke_active_api_key(redis_client, beamline, endstation):
+    api_key = get_api_key(redis_client, beamline, endstation)
+    if not api_key:
+        return
+
+    try:
+        tiled_context, _ = create_tiled_context(
+            beamline, endstation, api_key=api_key
+        )
+    except httpx.HTTPStatusError as exc:
+        # The stored key cannot authenticate, so it is safe to discard.
+        if exc.response.status_code == httpx.codes.UNAUTHORIZED:
+            set_api_key(redis_client, beamline, endstation, "")
+            return
+        raise
+
+    try:
+        # Check validity separately because Tiled also uses 401 for missing scopes.
+        try:
+            tiled_context.which_api_key()
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == httpx.codes.UNAUTHORIZED:
+                set_api_key(redis_client, beamline, endstation, "")
+                return
+            raise
+
+        try:
+            revoke_api_key(tiled_context)
+        except httpx.HTTPStatusError as exc:
+            # A 404 is already revoked; other failures may leave a valid key.
+            if exc.response.status_code != httpx.codes.NOT_FOUND:
+                raise
+
+        # A successful revocation or 404 means the key is unusable.
+        set_api_key(redis_client, beamline, endstation, "")
+    finally:
+        tiled_context.api_key = None
+        try:
+            tiled_context.logout()
+        finally:
+            tiled_context.close()
 
 
 def set_api_key(redis_client, beamline, endstation, api_key):
