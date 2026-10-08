@@ -299,13 +299,13 @@ def unsync_experiment(
         finally:
             tiled_context_revoke.api_key = None
             tiled_context_revoke.logout()
-    data_sessions_deauthorized = md["data_sessions_authorized"] or [
+    data_sessions_deauthorized = md.get("data_sessions_authorized") or [
         "<no authorized data sessions>"
     ]
     md["data_sessions_authorized"] = list()
-    data_session = md["data_session"] or "<no active data session>"
+    data_session = md.get("data_session") or "<no active data session>"
     md["data_session"] = ""
-    username = md["username"] or "<no current username>"
+    username = md.get("username") or "<no current username>"
     md["username"] = ""
     md["start_datetime"] = ""
     md["tiled_access_tags"] = list()
@@ -498,7 +498,6 @@ def create_tiled_context(
     client_id = spec.links.get("client_id")
     token_endpoint = spec.links.get("token_endpoint")
     oauth2_spec = True if client_id and token_endpoint else False
-    mode = spec.mode
 
     # Display link and access code, and try to open web browser.
     # Block while polling the server awaiting confirmation of authorization.
@@ -733,7 +732,7 @@ def main():
         "--unsync",
         dest="unsync",
         help="Unsync experiment - deauthorize all proposals and deactivate the experiment.",
-        action=argparse.BooleanOptionalAction,
+        action="store_true",
     )
     parser.add_argument(
         "-d",
