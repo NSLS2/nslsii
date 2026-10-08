@@ -701,14 +701,6 @@ def main():
         help="The beamline endstation for the experiment, if applicable",
         required=False,
     )
-    parser.add_argument(
-        "-d",
-        "--database",
-        dest="redis_db",
-        type=int,
-        default=0,
-        help="Redis database index",
-    )
 
     # Mutually exclusive modes: sync (proposals+activate), switch, unsync
     modes_group = parser.add_mutually_exclusive_group(required=True)
@@ -720,19 +712,6 @@ def main():
         nargs="+",
         type=int,
         help="The proposal ID(s) to authorize for the experiment",
-    )
-    parser.add_argument(
-        "-S",
-        "--enable-ssl",
-        dest="redis_ssl",
-        action="store_true",
-        help="Enable SSL for Redis connections",
-    )
-    parser.add_argument(
-        "-V",
-        "--version",
-        action="version",
-        version=f"%(prog)s {importlib.metadata.version('nslsii')}",
     )
     parser.add_argument(
         "-a",
@@ -755,6 +734,27 @@ def main():
         dest="unsync",
         help="Unsync experiment - deauthorize all proposals and deactivate the experiment.",
         action=argparse.BooleanOptionalAction,
+    )
+    parser.add_argument(
+        "-d",
+        "--database",
+        dest="redis_db",
+        type=int,
+        default=0,
+        help="Redis database index",
+    )
+    parser.add_argument(
+        "-S",
+        "--enable-ssl",
+        dest="redis_ssl",
+        action="store_true",
+        help="Enable SSL for Redis connections",
+    )
+    parser.add_argument(
+        "-V",
+        "--version",
+        action="version",
+        version=f"%(prog)s {importlib.metadata.version('nslsii')}",
     )
     parser.add_argument("-v", "--verbose", action=argparse.BooleanOptionalAction)
     args = parser.parse_args()
