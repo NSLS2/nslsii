@@ -8,7 +8,7 @@ import sys
 
 import nslsii
 from nslsii.utils import open_redis_client
-from nslsii.sync_experiment.sync_experiment import switch_redis_proposal
+from nslsii.sync_experiment.sync_experiment import switch_proposal
 
 # The __init__.py of nslsii.sync_experiment re-exports a function called
 # sync_experiment, which shadows the module of the same name. We need the
@@ -100,56 +100,61 @@ def test_configure_base_passes_redis_db(mock_open_rc):
 
 
 # ---------------------------------------------------------------------------
-# switch_redis_proposal tests
+# switch_proposal tests
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture()
 def switch_mocks():
-    """Patch all external dependencies of switch_redis_proposal and yield a dict of mocks."""
+    """Patch all external dependencies of switch_proposal and yield a dict of mocks."""
+    md = {
+        "data_sessions_authorized": ["pass-123456"],
+        "username": "testuser",
+    }
     with (
         patch.object(_sync_mod, "open_redis_client") as mock_open_rc,
-        patch.object(_sync_mod, "RedisJSONDict", return_value={}) as mock_rjd,
-        patch.object(_sync_mod, "should_they_be_here", return_value=True),
+        patch.object(_sync_mod, "RedisJSONDict", return_value=md) as mock_rjd,
         patch.object(
             _sync_mod,
-            "validate_proposal",
+            "retrieve_proposals",
             return_value={
-                "proposal_id": "123",
-                "title": "t",
-                "type": "GU",
-                "users": [],
+                "123456": {
+                    "proposal_id": "123456",
+                    "title": "t",
+                    "type": "GU",
+                    "users": [],
+                }
             },
         ),
-        patch.object(_sync_mod, "is_commissioning_proposal", return_value=False),
+        patch.object(_sync_mod, "get_commissioning_proposals", return_value=[]),
         patch.object(_sync_mod, "get_current_cycle", return_value="2026-1"),
     ):
         yield {"open_redis_client": mock_open_rc, "RedisJSONDict": mock_rjd}
 
 
-def test_switch_redis_proposal_ssl_no_prefix(switch_mocks):
+def test_switch_proposal_ssl_no_prefix(switch_mocks):
     """With redis_ssl=True the RedisJSONDict prefix should be empty."""
-    switch_redis_proposal(123456, beamline="SMI", username="testuser", redis_ssl=True)
+    switch_proposal(123456, beamline="SMI", username="testuser", redis_ssl=True)
 
     mock_rjd = switch_mocks["RedisJSONDict"]
     mock_rjd.assert_called_once()
     assert mock_rjd.call_args[1]["prefix"] == ""
 
 
-def test_switch_redis_proposal_endstation_no_ssl(switch_mocks):
-    """With endstation set and redis_ssl=False the prefix should be '{endstation}-'."""
-    switch_redis_proposal(
+def test_switch_proposal_endstation_no_ssl(switch_mocks):
+    """With an endstation and no SSL, prefix should identify beamline and endstation."""
+    switch_proposal(
         123456, beamline="SMI", username="testuser", endstation="opls", redis_ssl=False
     )
 
     mock_rjd = switch_mocks["RedisJSONDict"]
     mock_rjd.assert_called_once()
-    assert mock_rjd.call_args[1]["prefix"] == "opls-"
+    assert mock_rjd.call_args[1]["prefix"] == "smi-opls-"
 
 
-def test_switch_redis_proposal_passes_redis_db(switch_mocks):
+def test_switch_proposal_passes_redis_db(switch_mocks):
     """redis_db should be forwarded to open_redis_client."""
-    switch_redis_proposal(
+    switch_proposal(
         123456, beamline="SMI", username="testuser", redis_db=7, redis_ssl=False
     )
 
