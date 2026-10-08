@@ -56,6 +56,10 @@ def sync_experiment(
         the TLA of the beamline from which the experiment is running, not case-sensitive
     endstation : str or None (optional)
         the endstation at the beamline from which the experiment is running, not case-sensitive
+    redis_db : int (optional)
+        the Redis database index to use for the md Redis client (defaults to 0)
+    redis_ssl : bool (optional)
+        use SSL for Redis connections (defaults to False)
     verbose : bool (optional)
         turn on verbose printing
 
@@ -165,8 +169,8 @@ def sync_experiment(
     if verbose:
         print(f"Redis connection info: {md_redis_client.client().connection}")
 
-    redis_prefix = f"{redis_location}-" if not redis_ssl else ""
-    md = RedisJSONDict(redis_client=md_redis_client, prefix=redis_prefix)
+    md_redis_prefix = f"{redis_location}-" if not redis_ssl else ""
+    md = RedisJSONDict(redis_client=md_redis_client, prefix=md_redis_prefix)
 
     activate_session = "pass-" + activate_proposal
     proposal = proposals[activate_proposal]
@@ -213,6 +217,8 @@ def unsync_experiment(
     facility: str = "nsls2",
     beamline: str | None = None,
     endstation: str | None = None,
+    redis_db: int = 0,
+    redis_ssl: bool = False,
     verbose: bool = False,
 ) -> RedisJSONDict:
     """Unsync the currently active experiment (proposal) at the beamline.
@@ -226,6 +232,10 @@ def unsync_experiment(
         the TLA of the beamline from which the experiment is running, not case-sensitive
     endstation : str or None (optional)
         the endstation at the beamline from which the experiment is running, not case-sensitive
+    redis_db : int (optional)
+        the Redis database index to use for the md Redis client (defaults to 0)
+    redis_ssl : bool (optional)
+        use SSL for Redis connections (defaults to False)
     verbose : bool (optional)
         turn on verbose printing
 
@@ -255,12 +265,25 @@ def unsync_experiment(
         decode_responses=True,
     )
 
-    md_redis_client = redis.Redis(host=f"info.{normalized_beamline}.nsls2.bnl.gov")
-    md_redis_prefix = (
-        f"{normalized_beamline}-{endstation}-"
-        if endstation
-        else f"{normalized_beamline}-"
+    redis_location = (
+        f"{normalized_beamline}-{endstation}" if endstation else f"{normalized_beamline}"
     )
+
+    md_redis_client = open_redis_client(
+        redis_ssl=redis_ssl,
+        redis_location=redis_location,
+        redis_db=redis_db,
+        redis_url=(
+            f"info.{normalized_beamline}.nsls2.bnl.gov"
+            if not redis_ssl
+            else None
+        ),
+    )
+
+    if verbose:
+        print(f"Redis connection info: {md_redis_client.client().connection}")
+
+    md_redis_prefix = f"{redis_location}-" if not redis_ssl else ""
     md = RedisJSONDict(redis_client=md_redis_client, prefix=md_redis_prefix)
 
     api_key_active = get_api_key(apikey_redis_client, normalized_beamline, endstation)
@@ -311,9 +334,9 @@ def switch_proposal(
     facility: str = "nsls2",
     beamline: str | None = None,
     endstation: str | None = None,
-    verbose: bool = False,
     redis_db: int = 0,
     redis_ssl: bool = False,
+    verbose: bool = False,
 ) -> RedisJSONDict:
     """Switch the active experiment (proposal) at the beamline.
 
@@ -329,6 +352,10 @@ def switch_proposal(
         the TLA of the beamline from which the experiment is running, not case-sensitive
     endstation : str or None (optional)
         the endstation at the beamline from which the experiment is running, not case-sensitive
+    redis_db : int (optional)
+        the Redis database index to use for the md Redis client (defaults to 0)
+    redis_ssl : bool (optional)
+        use SSL for Redis connections (defaults to False)
     verbose : bool (optional)
         turn on verbose printing
 
@@ -371,8 +398,8 @@ def switch_proposal(
     if verbose:
         print(f"Redis connection info: {md_redis_client.client().connection}")
 
-    redis_prefix = f"{redis_location}-" if not redis_ssl else ""
-    md = RedisJSONDict(redis_client=md_redis_client, prefix=redis_prefix)
+    md_redis_prefix = f"{redis_location}-" if not redis_ssl else ""
+    md = RedisJSONDict(redis_client=md_redis_client, prefix=md_redis_prefix)
 
     activate_proposal = str(proposal_id)
     activate_session = "pass-" + activate_proposal
@@ -708,7 +735,7 @@ def main():
         version=f"%(prog)s {importlib.metadata.version('nslsii')}",
     )
     parser.add_argument(
-        "-s",
+        "-a",
         "--activate",
         dest="activate",
         type=int,
@@ -740,9 +767,9 @@ def main():
             facility=args.facility,
             beamline=args.beamline,
             endstation=args.endstation,
-            verbose=args.verbose,
             redis_db=args.redis_db,
             redis_ssl=args.redis_ssl,
+            verbose=args.verbose,
         )
     elif args.switch is not None:
         switch_proposal(
@@ -750,9 +777,9 @@ def main():
             beamline=args.beamline,
             endstation=args.endstation,
             proposal_id=args.switch,
-            verbose=args.verbose,
             redis_db=args.redis_db,
             redis_ssl=args.redis_ssl,
+            verbose=args.verbose,
         )
     else:
         sync_experiment(
@@ -761,7 +788,7 @@ def main():
             endstation=args.endstation,
             proposal_ids=args.proposals,
             activate_id=args.activate,
-            verbose=args.verbose,
             redis_db=args.redis_db,
             redis_ssl=args.redis_ssl,
+            verbose=args.verbose,
         )
