@@ -1,292 +1,193 @@
 import argparse
 import importlib.metadata
+import httpx
+import json
 import os
 import re
-import warnings
-from datetime import datetime
-from getpass import getpass
-from typing import Any, Dict, Union, Optional
-
-import httpx
 import redis
-import yaml
-from ldap3 import NTLM, Connection, Server
-from ldap3.core.exceptions import LDAPInvalidCredentialsResult, LDAPSocketOpenError
+
+from datetime import datetime
 from redis_json_dict import RedisJSONDict
-
-data_session_re = re.compile(r"^pass-(?P<proposal_number>\d+)$")
-
-nslsii_api_client = httpx.Client(base_url="https://api.nsls2.bnl.gov")
+from tiled.client.context import Context, device_code_grant, identity_provider_input
+from tiled.profiles import load_profiles
 
 from nslsii.utils import open_redis_client
 
 
-def get_current_cycle() -> str:
-    cycle_response = nslsii_api_client.get(
-        "/v1/facility/nsls2/cycles/current"
-    ).raise_for_status()
-    return cycle_response.json()["cycle"]
+facility_api_client = httpx.Client(base_url="https://api.nsls2.bnl.gov")
 
 
-def is_commissioning_proposal(proposal_number, beamline) -> bool:
-    """True if proposal_number is registered as a commissioning proposal; else False."""
-    commissioning_proposals_response = nslsii_api_client.get(
-        f"/v1/proposals/commissioning?beamline={beamline}"
-    ).raise_for_status()
-    commissioning_proposals = commissioning_proposals_response.json()[
-        "commissioning_proposals"
-    ]
-    return proposal_number in commissioning_proposals
+class KeyRemapper(dict):
+    def __missing__(self, key):
+        self[key] = key
+        return key
 
 
-def validate_proposal(data_session_value, beamline) -> Dict[str, Any]:
-    proposal_data = {}
-    data_session_match = data_session_re.match(data_session_value)
-
-    if data_session_match is None:
-        raise ValueError(
-            f"RE.md['data_session']='{data_session_value}' "
-            f"is not matched by regular expression '{data_session_re.pattern}'"
-        )
-
-    try:
-        current_cycle = get_current_cycle()
-        proposal_number = data_session_match.group("proposal_number")
-        proposal_commissioning = is_commissioning_proposal(proposal_number, beamline)
-        proposal_response = nslsii_api_client.get(
-            f"/v1/proposal/{proposal_number}"
-        ).raise_for_status()
-        proposal_data = proposal_response.json()["proposal"]
-        if "error_message" in proposal_data:
-            raise ValueError(
-                f"while verifying data_session '{data_session_value}' "
-                f"an error was returned by {proposal_response.url}: "
-                f"{proposal_data}"
-            )
-        else:
-            if (
-                not proposal_commissioning
-                and current_cycle not in proposal_data["cycles"]
-            ):
-                raise ValueError(
-                    f"Proposal {data_session_value} is not valid in the current NSLS2 cycle ({current_cycle})."
-                )
-            if beamline.upper() not in proposal_data["instruments"]:
-                raise ValueError(
-                    f"Wrong beamline ({beamline.upper()}) for proposal {data_session_value} ({', '.join(proposal_data['instruments'])})."
-                )
-            # data_session is valid!
-
-    except httpx.RequestError as rerr:
-        # give the user a warning but allow the run to start
-        warnings.warn(
-            f"while verifying data_session '{data_session_value}' "
-            f"the request {rerr.request.url!r} failed with "
-            f"'{rerr}'"
-        )
-
-    return proposal_data
+normalized_beamlines = KeyRemapper(
+    {
+        "sst1": "sst",
+        "sst2": "sst",
+    }
+)
 
 
-config_files = [
-    os.path.expanduser("~/.config/n2sn_tools.yml"),
-    "/etc/n2sn_tools.yml",
-]
-
-
-def authenticate(
-    username,
-):
-    config = None
-    for fn in config_files:
-        try:
-            with open(fn) as f:
-                config = yaml.safe_load(f)
-        except IOError:
-            pass
-        else:
-            break
-
-    if config is None:
-        raise RuntimeError("Unable to open a config file")
-
-    server = config.get("common", {}).get("server")
-
-    if server is None:
-        raise RuntimeError("Server name not found!")
-
-    auth_server = Server(server, use_ssl=True)
-
-    try:
-        connection = Connection(
-            auth_server,
-            user=f"BNL\\{username}",
-            password=getpass("Password : "),
-            authentication=NTLM,
-            auto_bind=True,
-            raise_exceptions=True,
-        )
-        print(f"\nAuthenticated as : {connection.extend.standard.who_am_i()}")
-
-    except LDAPInvalidCredentialsResult:
-        raise RuntimeError(f"Invalid credentials for user '{username}'.") from None
-    except LDAPSocketOpenError:
-        print(f"{server} server connection failed...")
-
-
-def should_they_be_here(username, new_data_session, beamline):
-    user_access_json = nslsii_api_client.get(f"/v1/data-session/{username}").json()
-
-    if "nsls2" in user_access_json["facility_all_access"]:
-        return True
-
-    elif beamline.lower() in user_access_json["beamline_all_access"]:
-        return True
-
-    elif new_data_session in user_access_json["data_sessions"]:
-        return True
-
-    return False
-
-
-class AuthorizationError(Exception): ...
-
-
-def switch_redis_proposal(
-    proposal_number: Union[int, str],
-    beamline: str,
-    username: Optional[str] = None,
-    endstation: str = "",
+def sync_experiment(
+    proposal_ids: list[int | str],
+    activate_id: int | str | None = None,
+    facility: str = "nsls2",
+    beamline: str | None = None,
+    endstation: str | None = None,
     redis_db: int = 0,
     redis_ssl: bool = False,
     verbose: bool = False,
 ) -> RedisJSONDict:
-    """Update information in RedisJSONDict for a specific beamline
+    """Sync a new experiment (proposal) at the beamline.
+    Authorizes the requested proposals, and activates one of them.
 
     Parameters
     ----------
-    proposal_number : int or str
-        number of the desired proposal, e.g. `123456`
-    beamline : str
-        Beamline acronym, case-insensitive, e.g. `SMI` or `sst1`
-    username : str or None
-        login name of the user assigned to the proposal; if None, current user will be kept
-    endstation : str, optional
-        optional name identify a specific endstation, e.g. `opls`
-    redis_db : int, optional
-        optional Redis database index, defaults to 0
-    redis_ssl : bool, optional
-        optional flag to enable/disable ssl connections to redis
+    proposal_ids : list[int or str]
+        the list of proposal IDs to authorize
+    activate_id : int or str (optional)
+        the ID number of the proposal to activate (defaults to the first proposal in proposal_ids)
+    facility : str (optional)
+        the facility that the beamline belongs to (defaults to "nsls2")
+    beamline : str or None (optional)
+        the TLA of the beamline from which the experiment is running, not case-sensitive
+    endstation : str or None (optional)
+        the endstation at the beamline from which the experiment is running, not case-sensitive
+    redis_db : int (optional)
+        the Redis database index to use for the md Redis client (defaults to 0)
+    redis_ssl : bool (optional)
+        use SSL for Redis connections (defaults to False)
+    verbose : bool (optional)
+        turn on verbose printing
 
     Returns
     -------
     md : RedisJSONDict
-        The updated redis dictionary.
+        The updated metadata dictionary
     """
-    normalized_beamlines = {
-        "sst1": "sst",
-        "sst2": "sst",
-    }
-    redis_beamline = normalized_beamlines.get(beamline.lower(), beamline)
-    location = endstation if endstation else redis_beamline
-    if redis_ssl:
-        redis_client = open_redis_client(
-            redis_ssl=redis_ssl,
-            redis_location=location,
-            redis_db=redis_db,
-        )
-        redis_prefix = None
-    else:
-        redis_url = f"info.{redis_beamline}.nsls2.bnl.gov"
-        redis_client = open_redis_client(
-            redis_ssl=redis_ssl,
-            redis_location=location,
-            redis_url=redis_url,
-            redis_db=redis_db,
-        )
-        redis_prefix = endstation
-    if verbose:
-        print(f"Redis connection info: {redis_client.client().connection}")
+    env_beamline, env_endstation = get_beamline_env()
+    beamline = beamline or env_beamline
+    endstation = endstation or env_endstation
+    proposal_ids = [str(proposal_id) for proposal_id in proposal_ids]
+    if not proposal_ids:
+        raise ValueError("At least one proposal ID must be provided.")
+    activate_proposal = activate_id if activate_id is not None else proposal_ids[0]
+    activate_proposal = str(activate_proposal)
 
-    if redis_prefix and redis_ssl:
+    if not beamline:
         raise ValueError(
-            f"Incompatible arguments: '{redis_prefix=}' and '{redis_ssl=}'. Prefixes are no longer supported "
-            f"when using SSL encryption. Specify `redis_db` if you want to use a distinct set of keys with '{redis_ssl=}'."
+            "No beamline provided! Please provide a beamline argument, "
+            "or set the 'BEAMLINE_ACRONYM' environment variable."
         )
-    prefix = f"{redis_prefix}-" if redis_prefix and not redis_ssl else ""
-    md = RedisJSONDict(redis_client=redis_client, prefix=prefix)
-    username = username or md.get("username")
-
-    new_data_session = f"pass-{proposal_number}"
-    if (new_data_session == md.get("data_session")) and (
-        username == md.get("username")
-    ):
-        # The cycle needs to get updated regardless of experiment status
-        md["cycle"] = (
-            "commissioning"
-            if is_commissioning_proposal(str(proposal_number), beamline)
-            else get_current_cycle()
-        )
-        warnings.warn(
-            f"Experiment {new_data_session} was already started by the same user."
-        )
-
-    else:
-        if not should_they_be_here(username, new_data_session, beamline):
-            raise AuthorizationError(
-                f"User '{username}' is not allowed to take data on proposal {new_data_session}"
+    for proposal_id in proposal_ids:
+        if not re.fullmatch(r"^\d{6}$", proposal_id):
+            raise ValueError(
+                f"Provided proposal ID '{proposal_id}' is not valid.\n "
+                f"A proposal ID must be a 6 character integer."
             )
+    if activate_proposal not in proposal_ids:
+        raise ValueError("Cannot activate a proposal which is not being authorized.")
 
-        proposal_data = validate_proposal(new_data_session, beamline)
-        users = proposal_data.pop("users")
-        pi_name = ""
-        for user in users:
-            if user.get("is_pi"):
-                pi_name = (
-                    f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
-                )
-        md["data_session"] = new_data_session  # e.g. "pass-123456"
-        md["username"] = username
-        md["start_datetime"] = datetime.now().isoformat()
-        # tiled-access-tags used by bluesky-tiled-writer, not saved to metadata
-        md["tiled_access_tags"] = [new_data_session]
-        md["cycle"] = (
-            "commissioning"
-            if is_commissioning_proposal(str(proposal_number), beamline)
-            else get_current_cycle()
+    beamline = beamline.lower()
+    if endstation:
+        endstation = endstation.lower()
+    normalized_beamline = normalized_beamlines[beamline]
+
+    # to-do:make this client use secure Redis (for API key storage)
+    apikey_redis_client = redis.Redis(
+        host=f"info.{normalized_beamline}.nsls2.bnl.gov",
+        port=6379,
+        db=15,
+        decode_responses=True,
+    )
+
+    print(f"\nWelcome to the {beamline.upper()} beamline at {facility.upper()}!\n")
+    if endstation:
+        print(f"This is the {endstation.upper()} endstation.\n")
+    print(
+        f"Attempting to sync experiment for proposal ID(s) {(', ').join(proposal_ids)}.\n"
+    )
+    print("Please login to Tiled with your BNL credentials.")
+
+    tiled_context, username = create_tiled_context(normalized_beamline, endstation)
+
+    try:
+        data_sessions = {"pass-" + proposal_id for proposal_id in proposal_ids}
+        if not proposals_can_be_authorized(username, facility, beamline, data_sessions):
+            raise ValueError(
+                f"You do not have permissions to authorize all proposal IDs: {', '.join(proposal_ids)}"
+            )
+        proposals = retrieve_proposals(facility, beamline, proposal_ids)
+        revoke_active_api_key(
+            apikey_redis_client, normalized_beamline, endstation
         )
-        md["proposal"] = {
-            "proposal_id": proposal_data.get("proposal_id"),
-            "title": proposal_data.get("title"),
-            "type": proposal_data.get("type"),
-            "pi_name": pi_name,
-        }
+        api_key_info = create_api_key(tiled_context, data_sessions, normalized_beamline)
+        api_key = api_key_info["secret"]
+        set_api_key(apikey_redis_client, normalized_beamline, endstation, api_key)
+    finally:
+        tiled_context.api_key = None
+        try:
+            tiled_context.logout()
+        finally:
+            tiled_context.close()
 
-        print(f"Started experiment {md['data_session']} by {md['username']}.")
+    redis_location = (
+        f"{normalized_beamline}-{endstation}" if endstation else f"{normalized_beamline}"
+    )
 
-    return md
-
-
-def sync_experiment(
-    proposal_number,
-    beamline,
-    verbose=False,
-    endstation="",
-    redis_db: int = 0,
-    redis_ssl=False,
-):
-    # Authenticate the user
-    username = input("Username : ")
-    authenticate(username)
-
-    md = switch_redis_proposal(
-        proposal_number,
-        beamline=beamline,
-        username=username,
-        endstation=endstation,
-        redis_db=redis_db,
+    md_redis_client = open_redis_client(
         redis_ssl=redis_ssl,
-        verbose=verbose,
+        redis_location=redis_location,
+        redis_db=redis_db,
+        redis_url=(
+            f"info.{normalized_beamline}.nsls2.bnl.gov"
+            if not redis_ssl
+            else None
+        ),
+    )
+
+    if verbose:
+        print(f"Redis connection info: {md_redis_client.client().connection}")
+
+    md_redis_prefix = f"{redis_location}-" if not redis_ssl else ""
+    md = RedisJSONDict(redis_client=md_redis_client, prefix=md_redis_prefix)
+
+    activate_session = "pass-" + activate_proposal
+    proposal = proposals[activate_proposal]
+
+    md["data_sessions_authorized"] = list(data_sessions)
+    users = proposal.pop("users")
+    pi_name = ""
+    for user in users:
+        if user.get("is_pi"):
+            pi_name = (
+                f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
+            )
+    md["data_session"] = activate_session  # e.g. "pass-123456"
+    md["username"] = username
+    md["start_datetime"] = datetime.now().isoformat()
+    # tiled-access-tags used by bluesky-tiled-writer, not saved to metadata
+    md["tiled_access_tags"] = [activate_session]
+    md["cycle"] = (
+        "commissioning"
+        if activate_proposal in get_commissioning_proposals(facility, beamline)
+        else get_current_cycle(facility)
+    )
+    md["proposal"] = {
+        "proposal_id": proposal.get("proposal_id"),
+        "title": proposal.get("title"),
+        "type": proposal.get("type"),
+        "pi_name": pi_name,
+    }
+
+    print(
+        f"Authorized experiments with data sessions {', '.join(md['data_sessions_authorized'])}\n"
+    )
+    print(
+        f"Activated experiment with data session {md['data_session']} by {md['username']}."
     )
 
     if verbose:
@@ -295,28 +196,557 @@ def sync_experiment(
     return md
 
 
+def unsync_experiment(
+    facility: str = "nsls2",
+    beamline: str | None = None,
+    endstation: str | None = None,
+    redis_db: int = 0,
+    redis_ssl: bool = False,
+    verbose: bool = False,
+) -> RedisJSONDict:
+    """Unsync the currently active experiment (proposal) at the beamline.
+    Also deauthorizes all currently authorized proposals.
+
+    Parameters
+    ----------
+    facility : str (optional)
+        the facility that the beamline belongs to (defaults to "nsls2")
+    beamline : str or None (optional)
+        the TLA of the beamline from which the experiment is running, not case-sensitive
+    endstation : str or None (optional)
+        the endstation at the beamline from which the experiment is running, not case-sensitive
+    redis_db : int (optional)
+        the Redis database index to use for the md Redis client (defaults to 0)
+    redis_ssl : bool (optional)
+        use SSL for Redis connections (defaults to False)
+    verbose : bool (optional)
+        turn on verbose printing
+
+    Returns
+    -------
+    md : RedisJSONDict
+        The updated metadata dictionary
+    """
+    env_beamline, env_endstation = get_beamline_env()
+    beamline = beamline or env_beamline
+    endstation = endstation or env_endstation
+
+    if not beamline:
+        raise ValueError(
+            "No beamline provided! Please provide a beamline argument, "
+            "or set the 'BEAMLINE_ACRONYM' environment variable."
+        )
+
+    beamline = beamline.lower()
+    if endstation:
+        endstation = endstation.lower()
+    normalized_beamline = normalized_beamlines[beamline]
+    apikey_redis_client = redis.Redis(
+        host=f"info.{normalized_beamline}.nsls2.bnl.gov",
+        port=6379,
+        db=15,
+        decode_responses=True,
+    )
+
+    redis_location = (
+        f"{normalized_beamline}-{endstation}" if endstation else f"{normalized_beamline}"
+    )
+
+    md_redis_client = open_redis_client(
+        redis_ssl=redis_ssl,
+        redis_location=redis_location,
+        redis_db=redis_db,
+        redis_url=(
+            f"info.{normalized_beamline}.nsls2.bnl.gov"
+            if not redis_ssl
+            else None
+        ),
+    )
+
+    if verbose:
+        print(f"Redis connection info: {md_redis_client.client().connection}")
+
+    md_redis_prefix = f"{redis_location}-" if not redis_ssl else ""
+    md = RedisJSONDict(redis_client=md_redis_client, prefix=md_redis_prefix)
+
+    revoke_active_api_key(apikey_redis_client, normalized_beamline, endstation)
+    data_sessions_deauthorized = md.get("data_sessions_authorized") or [
+        "<no authorized data sessions>"
+    ]
+    md["data_sessions_authorized"] = list()
+    data_session = md.get("data_session") or "<no active data session>"
+    md["data_session"] = ""
+    username = md.get("username") or "<no current username>"
+    md["username"] = ""
+    md["start_datetime"] = ""
+    md["tiled_access_tags"] = list()
+    md["cycle"] = ""
+    md["proposal"] = {
+        "proposal_id": "",
+        "title": "",
+        "type": "",
+        "pi_name": "",
+    }
+
+    print(
+        f"Deauthorized experiments with data sessions {', '.join(data_sessions_deauthorized)}\n"
+    )
+    print(f"Deactivated experiment with data session {data_session} by {username}.")
+
+    if verbose:
+        print(json.dumps(md, indent=2))
+
+    return md
+
+
+def switch_proposal(
+    proposal_id: int | str,
+    username: str | None = None,
+    facility: str = "nsls2",
+    beamline: str | None = None,
+    endstation: str | None = None,
+    redis_db: int = 0,
+    redis_ssl: bool = False,
+    verbose: bool = False,
+) -> RedisJSONDict:
+    """Switch the active experiment (proposal) at the beamline.
+
+    Parameters
+    ----------
+    proposal_id : int or str
+        the ID number of the proposal to activate
+    username : str or None (optional)
+        the current user's username - will prompt if no provided.
+    facility : str (optional)
+        the facility that the beamline belongs to (defaults to "nsls2")
+    beamline : str or None (optional)
+        the TLA of the beamline from which the experiment is running, not case-sensitive
+    endstation : str or None (optional)
+        the endstation at the beamline from which the experiment is running, not case-sensitive
+    redis_db : int (optional)
+        the Redis database index to use for the md Redis client (defaults to 0)
+    redis_ssl : bool (optional)
+        use SSL for Redis connections (defaults to False)
+    verbose : bool (optional)
+        turn on verbose printing
+
+    Returns
+    -------
+    md : RedisJSONDict
+        The updated metadata dictionary
+    """
+    env_beamline, env_endstation = get_beamline_env()
+    beamline = beamline or env_beamline
+    endstation = endstation or env_endstation
+
+    if not beamline:
+        raise ValueError(
+            "No beamline provided! Please provide a beamline argument, "
+            "or set the 'BEAMLINE_ACRONYM' environment variable."
+        )
+
+    beamline = beamline.lower()
+    if endstation:
+        endstation = endstation.lower()
+    normalized_beamline = normalized_beamlines[beamline]
+    username = username or input("Enter your username: ")
+
+    redis_location = (
+        f"{normalized_beamline}-{endstation}" if endstation else f"{normalized_beamline}"
+    )
+
+    md_redis_client = open_redis_client(
+        redis_ssl=redis_ssl,
+        redis_location=redis_location,
+        redis_db=redis_db,
+        redis_url=(
+            f"info.{normalized_beamline}.nsls2.bnl.gov"
+            if not redis_ssl
+            else None
+        ),
+    )
+
+    if verbose:
+        print(f"Redis connection info: {md_redis_client.client().connection}")
+
+    md_redis_prefix = f"{redis_location}-" if not redis_ssl else ""
+    md = RedisJSONDict(redis_client=md_redis_client, prefix=md_redis_prefix)
+
+    activate_proposal = str(proposal_id)
+    activate_session = "pass-" + activate_proposal
+    data_sessions_authorized = md.get("data_sessions_authorized")
+    if not data_sessions_authorized:
+        raise ValueError(
+            "There are no currently authorized data sessions (proposals).\n"
+            "Please run sync-experiment before attempting to switch the active proposal."
+        )
+    if not username == md.get("username"):
+        raise ValueError(
+            "The currently authorized data sessions (proposals) were authorized by a different user.\n"
+            "Please re-run sync-experiment to authorize as the intended user."
+        )
+    if activate_session not in data_sessions_authorized:
+        raise ValueError(
+            f"Cannot switch to proposal which has not been authorized.\n"
+            f"The authorized data sessions are: {', '.join(data_sessions_authorized)}\n"
+            f"To authorize different proposals, re-run sync-experiment."
+        )
+
+    proposals = retrieve_proposals(facility, beamline, [activate_proposal])
+    proposal = proposals[activate_proposal]
+
+    users = proposal.pop("users")
+    pi_name = ""
+    for user in users:
+        if user.get("is_pi"):
+            pi_name = (
+                f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
+            )
+    md["data_session"] = activate_session  # e.g. "pass-123456"
+    md["username"] = username
+    md["start_datetime"] = datetime.now().isoformat()
+    # tiled-access-tags used by bluesky-tiled-writer, not saved to metadata
+    md["tiled_access_tags"] = [activate_session]
+    md["cycle"] = (
+        "commissioning"
+        if activate_proposal in get_commissioning_proposals(facility, beamline)
+        else get_current_cycle(facility)
+    )
+    md["proposal"] = {
+        "proposal_id": proposal.get("proposal_id"),
+        "title": proposal.get("title"),
+        "type": proposal.get("type"),
+        "pi_name": pi_name,
+    }
+
+    print(
+        f"Switched to experiment wihh data session {md['data_session']} by {md['username']}."
+    )
+
+    return md
+
+
+def create_tiled_context(
+    beamline, endstation, api_key=None
+):
+    """
+    Create a new Tiled context and authenticate.
+
+    Loads the beamline Tiled profile, instantiates the new context,
+    selects an AuthN provider, attempts to retrieve tokens via
+    device_code_grant, then optionally prints a confirmation message
+    and authenticates the context.
+
+    If an api key is provided, the context is returned with that api key
+    attached, and further authentication is skipped.
+
+    """
+    profiles = load_profiles()
+    if endstation and endstation in profiles:
+        _, profile = profiles[endstation]
+    elif beamline in profiles:
+        _, profile = profiles[beamline]
+    else:
+        raise ValueError(f"Cannot find Tiled profile for beamline {beamline.upper()}")
+
+    context, _ = Context.from_any_uri(
+        profile["uri"], api_key=api_key, verify=profile.get("verify", True)
+    )
+
+    if api_key:
+        # the provider is not specified so no username is returned
+        return context, None
+
+    providers = context.server_info.authentication.providers
+    http_client = context.http_client
+    if len(providers) == 1:
+        # There is only one choice, so no need to prompt the user.
+        spec = providers[0]
+    else:
+        spec = identity_provider_input(providers)
+    auth_endpoint = spec.links["auth_endpoint"]
+    provider = spec.provider
+    client_id = spec.links.get("client_id")
+    token_endpoint = spec.links.get("token_endpoint")
+    oauth2_spec = True if client_id and token_endpoint else False
+
+    # Display link and access code, and try to open web browser.
+    # Block while polling the server awaiting confirmation of authorization.
+    scopes = " ".join(
+        sorted({"openid", "offline_access"} | set(spec.extra_scopes or []))
+    )
+    tokens = device_code_grant(
+        http_client, auth_endpoint, client_id, token_endpoint, scopes,
+    )
+
+    confirmation_message = spec.confirmation_message
+    if confirmation_message:
+        username = "external user" if oauth2_spec else tokens["identity"]["id"]
+        print(confirmation_message.format(id=username))
+
+    context.configure_auth(tokens, remember_me=False)
+
+    for identity in context.whoami()["identities"]:
+        if identity["provider"] == provider:
+            username = identity["id"]
+            break
+
+    return context, username
+
+
+def create_api_key(tiled_context, data_sessions, beamline):
+    access_tags = [data_session for data_session in data_sessions]
+    access_tags.append("public")
+    scopes = ["read:data", "read:metadata", "revoke:apikeys"]
+    expires_in = "7d"
+    hostname = os.getenv("HOSTNAME", "unknown host")
+    note = f"Auto-generated by sync-experiment from {hostname}"
+
+    if expires_in and expires_in.isdigit():
+        expires_in = int(expires_in)
+    info = tiled_context.create_api_key(
+        access_tags=access_tags, scopes=scopes, expires_in=expires_in, note=note
+    )
+    return info
+
+
+def revoke_api_key(tiled_context):
+    api_key = getattr(tiled_context, "api_key", None)
+    if not api_key:
+        raise ValueError("No API key attached to Tiled context. No API key to revoke.")
+    first_eight = api_key[:8]
+    tiled_context.revoke_api_key(first_eight)
+
+
+def revoke_active_api_key(redis_client, beamline, endstation):
+    api_key = get_api_key(redis_client, beamline, endstation)
+    if not api_key:
+        return
+
+    try:
+        tiled_context, _ = create_tiled_context(
+            beamline, endstation, api_key=api_key
+        )
+    except httpx.HTTPStatusError as exc:
+        # The stored key cannot authenticate, so it is safe to discard.
+        if exc.response.status_code == httpx.codes.UNAUTHORIZED:
+            set_api_key(redis_client, beamline, endstation, "")
+            return
+        raise
+
+    try:
+        # Check validity separately because Tiled also uses 401 for missing scopes.
+        try:
+            tiled_context.which_api_key()
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == httpx.codes.UNAUTHORIZED:
+                set_api_key(redis_client, beamline, endstation, "")
+                return
+            raise
+
+        try:
+            revoke_api_key(tiled_context)
+        except httpx.HTTPStatusError as exc:
+            # A 404 is already revoked; other failures may leave a valid key.
+            if exc.response.status_code != httpx.codes.NOT_FOUND:
+                raise
+
+        # A successful revocation or 404 means the key is unusable.
+        set_api_key(redis_client, beamline, endstation, "")
+    finally:
+        tiled_context.api_key = None
+        try:
+            tiled_context.logout()
+        finally:
+            tiled_context.close()
+
+
+def set_api_key(redis_client, beamline, endstation, api_key):
+    """
+    Use to set the active API key in Redis.
+
+    The active API key is stored with key:
+    <beamline tla>-<endstation acronym>-apikey-active
+
+    """
+    redis_prefix = (
+        f"{beamline}-{endstation}-apikey" if endstation else f"{beamline}-apikey"
+    )
+    redis_client.set(f"{redis_prefix}-active", api_key)
+
+
+def get_api_key(redis_client, beamline, endstation):
+    """
+    Use to get the active API key in Redis.
+
+    The active API key is stored with key:
+    <beamline tla>-<endstation acronym>-apikey-active
+
+    """
+    redis_prefix = (
+        f"{beamline}-{endstation}-apikey" if endstation else f"{beamline}-apikey"
+    )
+    api_key = redis_client.get(f"{redis_prefix}-active")
+
+    return api_key
+
+
+def get_current_cycle(facility):
+    cycle_response = facility_api_client.get(f"/v1/facility/{facility}/cycles/current")
+    cycle_response.raise_for_status()
+    cycle = cycle_response.json()["cycle"]
+    return cycle
+
+
+def get_commissioning_proposals(facility, beamline):
+    proposals_response = facility_api_client.get(
+        f"/v1/proposals/commissioning?beamline={beamline}&facility={facility}"
+    )
+    proposals_response.raise_for_status()
+    commissioning_proposals = proposals_response.json()["commissioning_proposals"]
+    return commissioning_proposals
+
+
+def proposals_can_be_authorized(username, facility, beamline, data_sessions):
+    """
+    Check that the user can authorize the requested proposals,
+    given their data_sessions.
+
+    Activation will be allowed if the user has facility or
+    beamline "all access", or is listed on all of the proposals.
+
+    Note: for this check to be effective, each proposal also
+          needs to be checked to ensure that the beamline matches
+          on the requested proposals.
+          This must be done in a subsequent validation step.
+          Otherwise, access could be granted to the wrong proposals.
+    """
+    user_access_response = facility_api_client.get(f"/v1/data-session/{username}")
+    user_access_response.raise_for_status()
+    user_access = user_access_response.json()
+
+    can_authorize = (
+        facility.lower() in user_access["facility_all_access"]
+        or beamline.lower() in user_access["beamline_all_access"]
+        or all(
+            data_session in user_access["data_sessions"]
+            for data_session in data_sessions
+        )
+    )
+    return can_authorize
+
+
+def retrieve_proposals(facility, beamline, proposal_ids):
+    """
+    Retrieve the data for the proposals that are being authorized.
+    This is also a validation step, ensuring that all the
+    requested proposals match the beamline.
+    ***Without this validation, access could be granted to the wrong proposals.***
+
+    In the future, this should also match proposals by facility as well.
+
+    If multiple proposals are to be authorized, they must all be allocated
+    for the same (current) cycle. For commissioning proposals, only one proposal
+    can be authorized at a time.
+    """
+    current_cycle = get_current_cycle(facility)
+    commissioning_proposals = get_commissioning_proposals(facility, beamline)
+    num_proposals = len(proposal_ids)
+    proposals = {}
+    for proposal_id in proposal_ids:
+        proposal_response = facility_api_client.get(f"/v1/proposal/{proposal_id}")
+        proposal_response.raise_for_status()
+        proposal = proposal_response.json()["proposal"]
+        if beamline.upper() not in proposal["instruments"]:
+            raise ValueError(
+                f"Proposal {proposal_id} is not at this beamline ({beamline.upper()})."
+                f"This proposal is at the following beamline(s): {', '.join(proposal['instruments'])}."
+            )
+        is_commissioning_proposal = proposal_id in commissioning_proposals
+        if num_proposals > 1 and is_commissioning_proposal:
+            raise ValueError(
+                f"Cannot authorize multiple experiments alongside a commmissioning proposal."
+                f"Proposal {proposal_id} is a commissioning proposal."
+            )
+        if not is_commissioning_proposal and current_cycle not in proposal["cycles"]:
+            raise ValueError(
+                f"Proposal {proposal_id} is not allocated for the current {facility.upper()} cycle ({current_cycle})."
+            )
+        proposals[proposal_id] = proposal
+
+    return proposals
+
+
+def get_beamline_env():
+    beamline = os.getenv("BEAMLINE_ACRONYM")
+    endstation = os.getenv("ENDSTATION_ACRONYM")
+    return beamline, endstation
+
+
 def main():
     # Used by the `sync-experiment` command
 
     parser = argparse.ArgumentParser(
-        description="Start or switch beamline experiment and record it in Redis"
+        description="Activate an experiment (proposal) - requires authentication"
+    )
+    parser.add_argument(
+        "-f",
+        "--facility",
+        dest="facility",
+        type=str,
+        help="The facility for the experiment (e.g. NSLS2)",
+        required=False,
+        default="nsls2",
     )
     parser.add_argument(
         "-b",
         "--beamline",
         dest="beamline",
         type=str,
-        help="Which beamline (e.g. CHX)",
-        required=True,
+        help="The beamline for the experiment (e.g. CHX)",
+        required=False,
     )
     parser.add_argument(
         "-e",
         "--endstation",
         dest="endstation",
         type=str,
-        default="",
-        help="Beamline endstation (for Redis lookup)",
+        help="The beamline endstation for the experiment, if applicable",
         required=False,
+    )
+
+    # Mutually exclusive modes: sync (proposals+activate), switch, unsync
+    modes_group = parser.add_mutually_exclusive_group(required=True)
+
+    modes_group.add_argument(
+        "-p",
+        "--proposals",
+        dest="proposals",
+        nargs="+",
+        type=int,
+        help="The proposal ID(s) to authorize for the experiment",
+    )
+    parser.add_argument(
+        "-a",
+        "--activate",
+        dest="activate",
+        type=int,
+        help="The ID of the proposal to activate, defaults to the first in the proposals list.",
+        required=False,
+    )
+    modes_group.add_argument(
+        "-s",
+        "--switch",
+        dest="switch",
+        type=int,
+        help="Switch the active proposal to this ID. The proposal must already be authorized.",
+    )
+    modes_group.add_argument(
+        "-u",
+        "--unsync",
+        dest="unsync",
+        help="Unsync experiment - deauthorize all proposals and deactivate the experiment.",
+        action="store_true",
     )
     parser.add_argument(
         "-d",
@@ -325,22 +755,13 @@ def main():
         type=int,
         default=0,
         help="Redis database index",
-        required=False,
     )
     parser.add_argument(
-        "-p",
-        "--proposal",
-        dest="proposal",
-        type=int,
-        help="Which proposal (e.g. 123456)",
-        required=True,
-    )
-    parser.add_argument(
-        "-s",
+        "-S",
         "--enable-ssl",
         dest="redis_ssl",
         action="store_true",
-        help="Flag to enable ssl connection with redis",
+        help="Enable SSL for Redis connections",
     )
     parser.add_argument(
         "-V",
@@ -351,11 +772,36 @@ def main():
     parser.add_argument("-v", "--verbose", action=argparse.BooleanOptionalAction)
     args = parser.parse_args()
 
-    sync_experiment(
-        proposal_number=args.proposal,
-        beamline=args.beamline,
-        verbose=args.verbose,
-        endstation=args.endstation,
-        redis_db=args.redis_db,
-        redis_ssl=args.redis_ssl,
-    )
+    if args.activate is not None and args.proposals is None:
+        parser.error("--activate can only be used when --proposals is provided")
+
+    if args.unsync:
+        unsync_experiment(
+            facility=args.facility,
+            beamline=args.beamline,
+            endstation=args.endstation,
+            redis_db=args.redis_db,
+            redis_ssl=args.redis_ssl,
+            verbose=args.verbose,
+        )
+    elif args.switch is not None:
+        switch_proposal(
+            facility=args.facility,
+            beamline=args.beamline,
+            endstation=args.endstation,
+            proposal_id=args.switch,
+            redis_db=args.redis_db,
+            redis_ssl=args.redis_ssl,
+            verbose=args.verbose,
+        )
+    else:
+        sync_experiment(
+            facility=args.facility,
+            beamline=args.beamline,
+            endstation=args.endstation,
+            proposal_ids=args.proposals,
+            activate_id=args.activate,
+            redis_db=args.redis_db,
+            redis_ssl=args.redis_ssl,
+            verbose=args.verbose,
+        )

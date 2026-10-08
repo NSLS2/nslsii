@@ -1,1 +1,1 @@
-from .sync_experiment import main, sync_experiment, validate_proposal, switch_redis_proposal
+from .sync_experiment import main, sync_experiment, unsync_experiment, switch_proposal
