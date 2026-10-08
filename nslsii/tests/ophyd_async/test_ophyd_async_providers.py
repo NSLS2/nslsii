@@ -135,6 +135,35 @@ def test_nsls2_path_provider_requires_tla(dummy_re_md_dict, monkeypatch):
         NSLS2PathProvider(dummy_re_md_dict)
 
 
+@pytest.mark.parametrize(
+    ("scan_id_padding", "expected_scan_dir"),
+    [
+        (6, "scan_000005"),
+        (0, "scan_5"),
+        (3, "scan_005"),
+        (10, "scan_0000000005"),
+    ],
+)
+def test_nsls2_path_provider_scan_id_padding(
+    dummy_re_md_dict, static_fp, scan_id_padding, expected_scan_dir
+):
+    os.environ["BEAMLINE_ACRONYM"] = "tst"
+    pp = NSLS2PathProvider(
+        dummy_re_md_dict,
+        filename_provider=static_fp,
+        include_scan_id_dir=True,
+        scan_id_padding=scan_id_padding,
+    )
+    info = pp("test")
+    assert str(info.directory_path).endswith(expected_scan_dir)
+
+
+def test_nsls2_path_provider_rejects_negative_padding(dummy_re_md_dict):
+    os.environ["BEAMLINE_ACRONYM"] = "tst"
+    with pytest.raises(ValueError, match="scan_id_padding must be a non-negative integer"):
+        NSLS2PathProvider(dummy_re_md_dict, scan_id_padding=-1)
+
+
 FIXED_NOW = datetime(2025, 3, 15, 10, 30, 45)
 
 
