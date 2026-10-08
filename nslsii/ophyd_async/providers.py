@@ -164,6 +164,8 @@ class NSLS2PathProvider(PathProvider):
         If set to YMDGranularity.year, the path will include only the year directory.
     include_scan_id_dir : bool, default False
         Whether to include a scan ID directory at the end of the path.
+    scan_id_padding : int, default 6
+        Number of digits to zero-pad the scan ID to when generating the scan ID directory name.
     """
 
     def __init__(
@@ -175,6 +177,7 @@ class NSLS2PathProvider(PathProvider):
         granularity: YMDGranularity | str = YMDGranularity.day,
         separator: str | None = None,
         include_scan_id_dir: bool = False,
+        scan_id_padding: int = 6,
     ):
 
         self._filename_provider = filename_provider
@@ -199,6 +202,7 @@ class NSLS2PathProvider(PathProvider):
 
         self._ymd_separator = separator or ("\\" if isinstance(self._base_write_dir, PureWindowsPath) else "/")
         self._include_scan_id_dir = include_scan_id_dir
+        self._scan_id_padding = scan_id_padding
 
     @property
     def filename_provider(self) -> FilenameProvider:
@@ -254,7 +258,10 @@ class NSLS2PathProvider(PathProvider):
         )
 
         if self._include_scan_id_dir:
-            directory_path = directory_path / f"scan_{self._metadata_dict['scan_id']:06}"
+            directory_path = (
+                directory_path
+                / f"scan_{self._metadata_dict['scan_id']:0{self._scan_id_padding}}"
+            )
 
         return directory_path
 
