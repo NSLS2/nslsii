@@ -202,7 +202,7 @@ class NSLS2PathProvider(PathProvider):
 
         self._ymd_separator = separator or ("\\" if isinstance(self._base_write_dir, PureWindowsPath) else "/")
         self._include_scan_id_dir = include_scan_id_dir
-        if scan_id_padding < 0:
+        if isinstance(scan_id_padding, bool) or not isinstance(scan_id_padding, int) or scan_id_padding < 0:
             raise ValueError("scan_id_padding must be a non-negative integer!")
         self._scan_id_padding = scan_id_padding
 

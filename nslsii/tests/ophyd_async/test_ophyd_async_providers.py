@@ -158,10 +158,11 @@ def test_nsls2_path_provider_scan_id_padding(
     assert str(info.directory_path).endswith(expected_scan_dir)
 
 
-def test_nsls2_path_provider_rejects_negative_padding(dummy_re_md_dict):
+@pytest.mark.parametrize("scan_id_padding", [-1, 1.5, True, "6"])
+def test_nsls2_path_provider_rejects_invalid_padding(dummy_re_md_dict, scan_id_padding):
     os.environ["BEAMLINE_ACRONYM"] = "tst"
     with pytest.raises(ValueError, match="scan_id_padding must be a non-negative integer"):
-        NSLS2PathProvider(dummy_re_md_dict, scan_id_padding=-1)
+        NSLS2PathProvider(dummy_re_md_dict, scan_id_padding=scan_id_padding)
 
 
 FIXED_NOW = datetime(2025, 3, 15, 10, 30, 45)
