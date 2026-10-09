@@ -1,0 +1,147 @@
+import asyncio
+import time
+
+import pytest
+from ophyd_async.core import (
+    LazyMock,
+    callback_on_mock_put,
+    get_mock_put,
+    init_devices,
+    set_mock_value,
+)
+
+from nslsii.ophyd_async.devices import (
+    Eurotherm3k,
+    Eurotherm3kControlMode,
+    Eurotherm3kLoop,
+)
+
+PREFIX = "XF:28ID1-ES{ET:05}"
+
+
+@pytest.mark.asyncio
+async def test_pvs_are_addressed():
+    async with init_devices(mock=True):
+        dev = Eurotherm3k(PREFIX, name="et")
+    # child loop signals compose under <prefix>LOOPn:
+    assert dev.loop1.setpoint.source == f"mock+ca://{PREFIX}LOOP1:SP:RBV"
+    assert dev.loop1.readback.source == f"mock+ca://{PREFIX}LOOP1:PV:RBV"
+    assert dev.loop2.setpoint.source == f"mock+ca://{PREFIX}LOOP2:SP:RBV"
+    # global signal sits directly under the prefix
+    assert dev.programmer_status.source == f"mock+ca://{PREFIX}PROGSTAT:RBV"
+
+
+@pytest.mark.asyncio
+async def test_format_tags_route_signals():
+    async with init_devices(mock=True):
+        dev = Eurotherm3k(PREFIX, name="et")
+    reading = await dev.read()
+    config = await dev.read_configuration()
+    # HINTED readbacks (merged from both loop CHILDren) appear in read()
+    assert "et-loop1" in reading
+    assert "et-loop2" in reading
+    # CONFIG signals appear in read_configuration()
+    assert "et-loop1-ramp_rate" in config
+
+
+@pytest.mark.asyncio
+async def test_control_mode_enum_roundtrip():
+    async with init_devices(mock=True):
+        dev = Eurotherm3k(PREFIX, name="et")
+    await dev.loop1.control_mode.set(Eurotherm3kControlMode.MANUAL)
+    assert await dev.loop1.control_mode.get_value() is Eurotherm3kControlMode.MANUAL
+
+
+@pytest.mark.asyncio
+async def test_set_commands_setpoint_and_settles():
+    async with init_devices(mock=True):
+        dev = Eurotherm3k(PREFIX, name="et")
+    await dev.loop1.set(300.0)
+    get_mock_put(dev.loop1.setpoint).assert_called_once_with(300.0)
+    location = await dev.loop1.locate()
+    assert location["setpoint"] == 300.0
+    assert location["readback"] == 300.0
+
+
+@pytest.mark.asyncio
+async def test_set_holds_in_band_for_settle_time():
+    """With settle_time > 0, set() waits the hold time even if the readback is
+    already in band and stops updating -- and must not block until move_timeout."""
+    loop = Eurotherm3kLoop(f"{PREFIX}LOOP1:", name="et-loop1")
+    await loop.connect(mock=LazyMock())
+    loop.tolerance = 1.0
+    loop.settle_time = 0.2
+    loop.move_timeout = 5.0
+    # already in band and stable (no further updates arrive)
+    set_mock_value(loop.readback, 300.0)
+    start = time.monotonic()
+    await loop.set(300.0)
+    elapsed = time.monotonic() - start
+    # waited ~settle_time, and crucially did NOT hang until move_timeout
+    assert 0.2 <= elapsed < 5.0
+    get_mock_put(loop.setpoint).assert_called_once_with(300.0)
+
+
+@pytest.mark.asyncio
+async def test_set_restarts_settle_time_after_out_of_band_excursion():
+    loop = Eurotherm3kLoop(f"{PREFIX}LOOP1:", name="et-loop1")
+    await loop.connect(mock=LazyMock())
+    loop.tolerance = 1.0
+    loop.settle_time = 0.2
+    loop.move_timeout = 5.0
+    set_mock_value(loop.readback, 300.0)
+
+    async def make_excursion() -> None:
+        await asyncio.sleep(loop.settle_time / 2)
+        set_mock_value(loop.readback, 0.0)
+        await asyncio.sleep(0)
+        set_mock_value(loop.readback, 300.0)
+
+    excursion_task: asyncio.Task[None] | None = None
+
+    def start_excursion(value: float) -> None:
+        nonlocal excursion_task
+        excursion_task = asyncio.create_task(make_excursion())
+
+    callback_on_mock_put(loop.setpoint, start_excursion)
+    start = time.monotonic()
+    await loop.set(300.0)
+    elapsed = time.monotonic() - start
+    assert excursion_task is not None
+    await excursion_task
+    assert 0.3 <= elapsed < 5.0
+    get_mock_put(loop.setpoint).assert_called_once_with(300.0)
+
+
+@pytest.mark.asyncio
+async def test_set_times_out_if_never_in_band():
+    loop = Eurotherm3kLoop(f"{PREFIX}LOOP1:", name="et-loop1")
+    await loop.connect(mock=LazyMock())
+    loop.tolerance = 0.5
+    loop.move_timeout = 0.3  # keep the test fast
+    set_mock_value(loop.readback, 0.0)  # stays far from 300
+    with pytest.raises(TimeoutError):
+        await loop.set(300.0)
+
+
+# Legacy PDF eurotherm3k (pdf-profile-collection/startup/16-eurotherm_HAB.py):
+# each component -> the ophyd-async signal that must address the same PV.
+_LEGACY_PV_MAP = {
+    "setpoint": ("loop1", "setpoint", "LOOP1:SP:RBV"),
+    "readback": ("loop1", "readback", "LOOP1:PV:RBV"),
+    "working": ("loop1", "working_setpoint", "LOOP1:WSP:RBV"),
+    "output": ("loop1", "output", "LOOP1:O:RBV"),
+    "ramprate": ("loop1", "ramp_rate", "LOOP1:RR:RBV"),
+    "manual_mode": ("loop1", "control_mode", "LOOP1:MAN:RBV"),
+    "autotune": ("loop1", "autotune", "LOOP1:AUTOTUNE:RBV"),
+}
+
+
+@pytest.mark.asyncio
+async def test_legacy_pv_surface_equivalence():
+    """Every PV of the legacy PDF eurotherm3k is addressed identically here."""
+    async with init_devices(mock=True):
+        dev = Eurotherm3k(PREFIX, name="et")
+    for _legacy, (loop, attr, suffix) in _LEGACY_PV_MAP.items():
+        signal = getattr(getattr(dev, loop), attr)
+        assert signal.source == f"mock+ca://{PREFIX}{suffix}"
