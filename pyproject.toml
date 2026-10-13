@@ -54,6 +54,7 @@ dev = [
   "area_detector_handlers",
   "attrs>=17.4.0",
   "build",
+  "bluesky-tiled-plugins",
   "coverage",
   "doct",
   "ipython",
@@ -67,6 +68,7 @@ dev = [
   "ruff",
   "sphinx",
   "sphinx_rtd_theme",
+  "tiled[server]",
 ]
 
 [project.scripts]

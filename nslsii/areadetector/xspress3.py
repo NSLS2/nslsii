@@ -827,7 +827,11 @@ def _validate_mcaroi_number(mcaroi_number):
 
 
 def build_channel_class(
-    channel_number, mcaroi_numbers, image_data_key=None, channel_parent_classes=None
+    channel_number,
+    mcaroi_numbers,
+    image_data_key=None,
+    channel_parent_classes=None,
+    external_file_reference_class=Xspress3ExternalFileReference,
 ):
     """Build an Xspress3 channel class with the specified channel number and MCAROI numbers.
 
@@ -850,6 +854,10 @@ def build_channel_class(
     channel_parent_classes: list-like, optional
         sequence of all parent classes for the generated channel class,
         by default the only parent is ophyd.areadetector.ADBase
+    external_file_reference_class: type, optional
+        the compatible ``Xspress3ExternalFileReference`` class used for the
+        channel's ``image_data_key`` component, default is
+        ``Xspress3ExternalFileReference``
 
     Returns
     -------
@@ -882,9 +890,6 @@ def build_channel_class(
     mcaroi_name_re = re.compile(r"mcaroi\d{2}")
 
     # the following functions will become methods of the generated channel class
-    def __init__(self, *args, **kwargs):
-        super(type(self), self).__init__(*args, **kwargs)
-
     def __repr__(self):
         return f"{self.__class__.__name__}(channel_number={self.channel_number}, mcaroi_numbers={self.mcaroi_numbers})"
 
@@ -935,7 +940,6 @@ def build_channel_class(
             return None
 
     channel_fields_and_methods = {
-        "__init__": __init__,
         "__repr__": __repr__,
         # keep the read and configuration attrs defined by the Components
         "_default_read_attrs": None,
@@ -958,7 +962,7 @@ def build_channel_class(
     # Xspress3ExternalFileReference is optional
     if image_data_key:
         channel_fields_and_methods[image_data_key] = Cpt(
-            Xspress3ExternalFileReference, kind=Kind.normal
+            external_file_reference_class, kind=Kind.normal
         )
 
     channel_fields_and_methods.update(
@@ -1018,6 +1022,7 @@ def build_xspress3_class(
     channel_parent_classes=None,
     xspress3_parent_classes=None,
     extra_class_members=None,
+    external_file_reference_class=Xspress3ExternalFileReference,
 ):
     """Build an Xspress3 detector class with the specified channel and roi numbers.
 
@@ -1052,6 +1057,11 @@ def build_xspress3_class(
     extra_class_members: Dict[String, Any]
         a dictionary of extra class members to be passed to the builtin type(...)
         function; see the builtin type function for allowed key-value pairs
+    external_file_reference_class: type, optional
+        the compatible ``Xspress3ExternalFileReference`` class used for the
+        detector's ``image_data_key`` component and every channel's
+        ``image_data_key`` component, default is
+        ``Xspress3ExternalFileReference``
 
     Returns
     -------
@@ -1185,7 +1195,7 @@ def build_xspress3_class(
     # Xspress3ExternalFileReference is optional
     if image_data_key:
         xspress3_fields_and_methods[image_data_key] = Cpt(
-            Xspress3ExternalFileReference, kind=Kind.normal
+            external_file_reference_class, kind=Kind.normal
         )
 
     xspress3_fields_and_methods.update(
@@ -1196,6 +1206,7 @@ def build_xspress3_class(
                     mcaroi_numbers=mcaroi_numbers,
                     image_data_key=image_data_key,
                     channel_parent_classes=channel_parent_classes,
+                    external_file_reference_class=external_file_reference_class,
                 ),
                 # there is no discrete channel prefix
                 # for the Xspress3 IOC PVs
