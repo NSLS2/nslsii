@@ -63,6 +63,7 @@ dev = [
   "pre-commit",
   "pytest",
   "pytest-asyncio",
+  "pytest-mock",
   "pytz",
   "ruff",
   "sphinx",
