@@ -13,7 +13,7 @@ from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import PureWindowsPath
 from typing import Annotated as A
-from typing import Literal, TypeVar
+from typing import TYPE_CHECKING, Literal, TypeVar
 
 import numpy as np
 from bluesky.protocols import StreamAsset
@@ -25,6 +25,7 @@ from ophyd_async.core import (
     DetectorDataLogic,
     DetectorTriggerLogic,
     DeviceConnector,
+    DeviceMock,
     PathProvider,
     SignalDict,
     SignalR,
@@ -33,9 +34,12 @@ from ophyd_async.core import (
     StreamResourceInfo,
     StrictEnum,
     SupersetEnum,
+    callback_on_mock_put,
+    default_mock_class,
     derived_signal_r,
     error_if_none,
     set_and_wait_for_other_value,
+    set_mock_value,
     soft_signal_r_and_setter,
     wait_for_value,
 )
@@ -46,11 +50,15 @@ from ophyd_async.epics.adcore import (
     ADState,
     ADWriterFactory,
     AreaDetector,
+    NDFileHDF5IO,
     NDFileIO,
     NDPluginBaseIO,
     trigger_info_from_num_images,
 )
 from ophyd_async.epics.core import PvSuffix, stop_busy_record, wait_for_good_state
+
+if TYPE_CHECKING:
+    import h5py
 
 # NumImages for unbounded requests; the driver clamps to the DCU limit and the readback
 # reflects the clamped value.
@@ -655,6 +663,139 @@ class EigerFileWriterDataLogic(DetectorDataLogic):
 EigerDriverIOT = TypeVar("EigerDriverIOT", bound=EigerDriverIO)
 
 
+class FakeEigerIOC(DeviceMock["EigerDetector"]):
+    """Generate frames and files for an ADEiger connected in mock mode.
+
+    Pass an instance as ``mock=`` to inject external pulses with `external_pulses`.
+    """
+
+    driver: EigerDriverIO
+    hdf_plugins: list[NDFileHDF5IO]
+    triggers: int
+    data_files: int
+    _tasks: set[asyncio.Task[None]]
+
+    async def connect(self, device: EigerDetector) -> None:
+        self.driver = device.driver
+        self.hdf_plugins = [child for _, child in device.children() if isinstance(child, NDFileHDF5IO)]
+        self.triggers = 0
+        self.data_files = 0
+        self._tasks = set()
+        driver = self.driver
+        set_mock_value(driver.bit_depth_image, 16)
+        set_mock_value(driver.signed_data, False)
+        set_mock_value(driver.array_size_y, 514)
+        set_mock_value(driver.array_size_x, 1030)
+        set_mock_value(driver.dead_time, 3e-6)
+        set_mock_value(driver.detector_state, ADState.IDLE)
+        set_mock_value(driver.sequence_id, 41)
+        set_mock_value(driver.array_counter, 7)
+        set_mock_value(driver.file_path_exists, True)
+        set_mock_value(driver.fw_nimgs_per_file, 1000)
+        callback_on_mock_put(driver.acquire, self._on_acquire)
+        callback_on_mock_put(driver.trigger_, self._on_trigger)
+        for hdf in self.hdf_plugins:
+            set_mock_value(hdf.file_path_exists, True)
+
+    async def _on_acquire(self, value: bool) -> None:
+        if value:
+            self.triggers = 0
+            self.data_files = 0
+            set_mock_value(self.driver.sequence_id, await self.driver.sequence_id.get_value() + 1)
+            set_mock_value(self.driver.armed, True)
+        else:
+            set_mock_value(self.driver.armed, False)
+
+    async def _on_trigger(self, _: float) -> None:
+        # Like controlTask: the series accepts NumTriggers software triggers, then disarms.
+        self.triggers += 1
+        last = self.triggers >= await self.driver.num_triggers.get_value()
+        task = asyncio.create_task(self._count_frames(1, end_series=last))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _count_frames(self, num_triggers: int, end_series: bool) -> None:
+        num_images, counter = await asyncio.gather(
+            self.driver.num_images.get_value(), self.driver.array_counter.get_value()
+        )
+        num_frames = num_triggers * num_images
+        # Files land before the IOC counts their frames; active HDF plugins take priority.
+        capturing = False
+        for hdf in self.hdf_plugins:
+            if await hdf.capture.get_value():
+                capturing = True
+                await self._write_plugin_frames(hdf, num_frames)
+        if not capturing and await self.driver.save_files.get_value():
+            await self._write_dcu_file(counter, num_frames)
+        set_mock_value(self.driver.array_counter, counter + num_frames)
+        if end_series:
+            set_mock_value(self.driver.armed, False)
+            set_mock_value(self.driver.acquire, False)
+
+    async def _write_plugin_frames(self, hdf: NDFileHDF5IO, num_frames: int) -> None:
+        """Append to ``{FilePath}{FileName}.h5`` as NDFileHDF5 would."""
+        import h5py
+
+        file_path, file_name, captured, ny, nx = await asyncio.gather(
+            hdf.file_path.get_value(),
+            hdf.file_name.get_value(),
+            hdf.num_captured.get_value(),
+            self.driver.array_size_y.get_value(),
+            self.driver.array_size_x.get_value(),
+        )
+        frame_shape = (ny, nx)
+        with h5py.File(f"{file_path}{file_name}.h5", "a") as f:
+            if "/entry/data/data" not in f:
+                dataset = f.create_dataset(
+                    "/entry/data/data",
+                    shape=(0, *frame_shape),
+                    maxshape=(None, *frame_shape),
+                    chunks=(1, *frame_shape),
+                    dtype=np.uint16,
+                )
+            else:
+                dataset = f["/entry/data/data"]
+            self._fill(dataset, captured, num_frames)
+        set_mock_value(hdf.num_captured, captured + num_frames)
+
+    async def _write_dcu_file(self, first_frame: int, num_frames: int) -> None:
+        """Save one DCU data file, ``{FilePath}{FWNamePattern with $id}_data_{k:06d}.h5``."""
+        import h5py
+
+        file_path, pattern, sequence_id, ny, nx = await asyncio.gather(
+            self.driver.file_path.get_value(),
+            self.driver.fw_name_pattern.get_value(),
+            self.driver.sequence_id.get_value(),
+            self.driver.array_size_y.get_value(),
+            self.driver.array_size_x.get_value(),
+        )
+        frame_shape = (ny, nx)
+        index = self.data_files + 1
+        name = pattern.replace("$id", str(sequence_id))
+        with h5py.File(f"{file_path}{name}_data_{index:06d}.h5", "w") as f:
+            dataset = f.create_dataset(
+                "/entry/data/data",
+                shape=(0, *frame_shape),
+                maxshape=(None, *frame_shape),
+                chunks=(1, *frame_shape),
+                dtype=np.uint16,
+            )
+            self._fill(dataset, first_frame, num_frames)
+        self.data_files = index
+
+    @staticmethod
+    def _fill(dataset: h5py.Dataset, first_frame: int, num_frames: int) -> None:
+        # Frame k of the scan has pixel value k.
+        start = dataset.shape[0]
+        dataset.resize(start + num_frames, axis=0)
+        for i in range(num_frames):
+            dataset[start + i] = first_frame + i
+
+    async def external_pulses(self, num_triggers: int) -> None:
+        await self._count_frames(num_triggers, end_series=True)
+
+
+@default_mock_class(FakeEigerIOC)
 class EigerDetector(AreaDetector[EigerDriverIOT]):
     """An ADEiger detector.
 
@@ -665,6 +806,13 @@ class EigerDetector(AreaDetector[EigerDriverIOT]):
       file per scan from the DCU stream. The Dectris master file is not produced.
     - ``fw_path_provider=``: the IOC saves the DCU FileWriter files, one per point, including
       the master file. Lossless, but see `EigerFileWriterDataLogic` for its limitation.
+
+    Mock connections use `FakeEigerIOC` automatically with either storage mode:
+    ``await detector.connect(mock=True)``. For externally triggered scans, retain an
+    instance (``mock = FakeEigerIOC(); await detector.connect(mock=mock)``) and call
+    ``await mock.external_pulses(n)`` after arming. Use `set_mock_value` on
+    ``driver.array_size_y`` and ``driver.array_size_x`` to change the mock frame size.
+    ``connect(mock=False)`` still connects to the real IOC.
 
     Parameters
     ----------

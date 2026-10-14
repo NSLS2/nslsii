@@ -6,7 +6,7 @@ import bluesky.plans as bp
 import numpy as np
 import pytest
 from bluesky_tiled_plugins import TiledWriter
-from ophyd_async.core import init_devices
+from ophyd_async.core import init_devices, set_mock_value
 from ophyd_async.epics.adcore import ADWriterFactory
 from tiled.client import from_uri
 from tiled.server import SimpleTiledServer
@@ -27,13 +27,14 @@ def tiled_client(tmp_path):
         ("filewriter", ["abc_42_data_000001.h5", "abc_42_data_000002.h5", "abc_42_data_000003.h5"]),
     ],
 )
-def test_count_to_tiled(RE, path_provider, fake_ioc, tiled_client, storage, files):
+def test_count_to_tiled(RE, path_provider, tiled_client, storage, files):
     with init_devices(mock=True):
         if storage == "hdf_plugin":
             det = EigerDetector("X:", ADWriterFactory.hdf(path_provider), driver_cls=Eiger2DriverIO, name="det")
         else:
             det = EigerDetector("X:", driver_cls=Eiger2DriverIO, fw_path_provider=path_provider, name="det")
-    fake_ioc(det.driver, hdf=det.hdf if storage == "hdf_plugin" else None, frame_shape=(4, 6))
+    set_mock_value(det.driver.array_size_y, 4)
+    set_mock_value(det.driver.array_size_x, 6)
     RE.subscribe(TiledWriter(tiled_client))
     uids: list[str] = []
     RE.subscribe(lambda _, doc: uids.append(doc["uid"]), "start")

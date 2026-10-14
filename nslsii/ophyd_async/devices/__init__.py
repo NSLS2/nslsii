@@ -16,6 +16,7 @@ from .eiger import (
     EigerStreamVersion,
     EigerTriggerLogic,
     EigerTriggerMode,
+    FakeEigerIOC,
     Pilatus4DriverIO,
 )
 from .rbd9103 import (
@@ -45,6 +46,7 @@ __all__ = [
     "EigerStreamVersion",
     "EigerTriggerLogic",
     "EigerTriggerMode",
+    "FakeEigerIOC",
     "Pilatus4DriverIO",
     "RBD9103",
     "RBD9103Range",
