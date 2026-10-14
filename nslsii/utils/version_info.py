@@ -2,7 +2,7 @@
 from pathlib import Path
 import subprocess
 
-def git_info(git_dir: Path) -> tuple[str, str, bool] | tuple[None, None, None]:
+def git_info(git_dir: Path | str) -> tuple[str, str, bool] | tuple[None, None, None]:
     """Helper function to get metadata of local git repository"""
     cwd = Path(git_dir).resolve()
 

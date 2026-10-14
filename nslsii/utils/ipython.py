@@ -1,6 +1,5 @@
 
 from bluesky.run_engine import RunEngine
-from IPython.core.getipython import get_ipython
 from IPython.terminal.interactiveshell import TerminalInteractiveShell
 from IPython.terminal.prompts import Prompts
 from pygments.token import Token
