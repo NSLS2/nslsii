@@ -356,6 +356,18 @@ async def test_external_prepare_arms_before_kickoff_and_complete_waits(trigger, 
 
 
 @pytest.mark.asyncio
+async def test_constructor_level_trigger_mode_selects_level_mode_before_connection():
+    detector = make_detector(channel_numbers=(1, 2), level_trigger_mode=Xspress3LevelTriggerMode.TTL_BOTH)
+    await connect_and_seed(detector, channels=2)
+    await detector.stage()
+
+    await detector.prepare(TriggerInfo(trigger=DetectorTrigger.EXTERNAL_LEVEL, number_of_events=2))
+    assert await detector.driver.trigger_mode.get_value() is Xspress3TriggerMode.TTL_BOTH
+    await detector.unstage()
+
+
+
+@pytest.mark.asyncio
 async def test_internal_trigger_waits_for_busy_completion_and_frame_count():
     detector = make_detector(channel_numbers=(1, 2))
     await connect_and_seed(detector, channels=2)
@@ -553,6 +565,30 @@ async def test_roi_and_sca_stream_flags_are_independent(
     for key in description.keys() - {"xs", "xs-channel1"}:
         assert description[key]["dtype_numpy"] == np.dtype(np.float64).str
     await detector.unstage()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("include_roi_streams", [True, False])
+async def test_roi_definitions_are_configuration_only_with_roi_streams(include_roi_streams):
+    detector = make_detector(
+        channel_numbers=(1, 2),
+        mca_roi_numbers=(1, 3),
+        include_roi_streams=include_roi_streams,
+    )
+    await detector.connect(mock=True)
+
+    configuration = await detector.read_configuration()
+    roi_keys = {
+        f"xs-channels-{channel}-rois-{roi}-{attribute}"
+        for channel in (1, 2)
+        for roi in (1, 3)
+        for attribute in ("label", "min_x", "size_x")
+    }
+    if include_roi_streams:
+        assert roi_keys <= configuration.keys()
+    else:
+        assert not any("-rois-" in key for key in configuration)
+
 
 
 @pytest.mark.asyncio

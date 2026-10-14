@@ -692,6 +692,10 @@ class Xspress3Detector(AreaDetector[Xspress3DriverIO]):
         Minimum external-trigger deadtime in seconds.
     include_roi_reset : bool, optional
         Create optional ROI reset commands.
+    level_trigger_mode : Xspress3LevelTriggerMode, optional
+        Initial IOC trigger mode used for ``DetectorTrigger.EXTERNAL_LEVEL``
+        acquisitions; defaults to ``TTL Veto Only`` and remains writable through
+        the ``level_trigger_mode`` signal.
     plugins : mapping of str to NDPluginBaseIO, optional
         Additional AreaDetector plugins.
     config_sigs : sequence of SignalR, optional
@@ -717,6 +721,7 @@ class Xspress3Detector(AreaDetector[Xspress3DriverIO]):
         driver_suffix: str = "det1:",
         minimum_deadtime: float = 0.0,
         include_roi_reset: bool = False,
+        level_trigger_mode: Xspress3LevelTriggerMode = Xspress3LevelTriggerMode.TTL_VETO_ONLY,
         plugins: Mapping[str, NDPluginBaseIO] | None = None,
         config_sigs: Sequence[SignalR] = (),
         name: str = "",
@@ -742,13 +747,21 @@ class Xspress3Detector(AreaDetector[Xspress3DriverIO]):
                 for channel_number in driver.channel_numbers
             }
         )
-        self.level_trigger_mode = soft_signal_rw(Xspress3LevelTriggerMode, Xspress3LevelTriggerMode.TTL_VETO_ONLY)
+        self.level_trigger_mode = soft_signal_rw(Xspress3LevelTriggerMode, level_trigger_mode)
         trigger_logic = Xspress3TriggerLogic(
             driver,
             level_trigger_mode=self.level_trigger_mode,
             minimum_deadtime=minimum_deadtime,
         )
         acquire_logic = Xspress3AcquireLogic(driver)
+        roi_config_sigs: tuple[SignalR, ...] = ()
+        if writer_factory is not None and writer_factory.include_roi_streams:
+            roi_config_sigs = tuple(
+                signal
+                for channel in self.channels.values()
+                for roi in channel.rois.values()
+                for signal in (roi.label, roi.min_x, roi.size_x)
+            )
         super().__init__(
             driver,
             prefix,
@@ -764,6 +777,7 @@ class Xspress3Detector(AreaDetector[Xspress3DriverIO]):
                 driver.ctrl_dtc,
                 driver.erase_on_start,
                 *config_sigs,
+                *roi_config_sigs,
             ),
             name=name,
         )
