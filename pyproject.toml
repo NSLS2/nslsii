@@ -152,9 +152,13 @@ python = "3.12.*"
 [tool.pixi.feature.py313.dependencies]
 python = "3.13.*"
 
+[tool.pixi.feature.py314.dependencies]
+python = "3.14.*"
+
 [tool.pixi.environments]
 default = { solve-group = "default" }
 dev = { features = ["dev"], solve-group = "default" }
 py311 = ["dev", "py311"]
 py312 = ["dev", "py312"]
 py313 = ["dev", "py313"]
+py314 = ["dev", "py314"]
