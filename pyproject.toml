@@ -8,7 +8,7 @@ description = "Tools for data collection and analysis at NSLS-II"
 readme = { file = "README.md", content-type = "text/markdown" }
 license = { file = "LICENSE" }
 authors = [{ name = "Brookhaven National Laboratory" }]
-requires-python = ">=3.11,<3.15"
+requires-python = ">=3.11,<3.14"
 classifiers = [
   "Development Status :: 4 - Beta",
   "License :: OSI Approved :: BSD License",
@@ -16,7 +16,6 @@ classifiers = [
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
-  "Programming Language :: Python :: 3.14",
   "Topic :: Scientific/Engineering :: Physics",
 ]
 dependencies = [
@@ -52,8 +51,11 @@ dynamic = ["version"]
 [dependency-groups]
 dev = [
   "area_detector_handlers",
+  "bluesky-tiled-plugins>=2.0.11,<3",
   "attrs>=17.4.0",
   "build",
+  "greenlet>=3.5.6,<4",
+  "hdf5plugin>=7.1.0,<8",
   "coverage",
   "doct",
   "ipython",
@@ -68,6 +70,7 @@ dev = [
   "ruff",
   "sphinx",
   "sphinx_rtd_theme",
+  "tiled[server]>=0.2.18,<0.3",
 ]
 
 [project.scripts]
@@ -144,6 +147,13 @@ format = "ruff format --force-exclude ."
 lint = "ruff check --force-exclude ."
 test = "pytest"
 
+[tool.pixi.feature.dev.dependencies]
+bluesky-tiled-plugins = ">=2.0.11,<3"
+tiled-server = ">=0.2.18,<0.3"
+greenlet = ">=3.5.6,<4"
+hdf5plugin = ">=7.1.0,<8"
+
+
 [tool.pixi.feature.py311.dependencies]
 python = "3.11.*"
 
@@ -153,13 +163,9 @@ python = "3.12.*"
 [tool.pixi.feature.py313.dependencies]
 python = "3.13.*"
 
-[tool.pixi.feature.py314.dependencies]
-python = "3.14.*"
-
 [tool.pixi.environments]
 default = { solve-group = "default" }
 dev = { features = ["dev"], solve-group = "default" }
 py311 = ["dev", "py311"]
 py312 = ["dev", "py312"]
 py313 = ["dev", "py313"]
-py314 = ["dev", "py314"]
