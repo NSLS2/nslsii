@@ -329,7 +329,8 @@ def test_configure_ipython_exc_logging_with_unwriteable_dir(tmpdir):
 
     ip = IPython.core.interactiveshell.InteractiveShell()
     os.environ["BLUESKY_IPYTHON_LOG_FILE"] = str(log_file_path)
-    with pytest.raises(PermissionError):
+    # Path.exists() raises PermissionError here before Python 3.14; from 3.14 IPython's warning is raised instead
+    with pytest.raises((PermissionError, UserWarning)):
         configure_ipython_logging(
             exception_logger=log_exception,
             ipython=ip,

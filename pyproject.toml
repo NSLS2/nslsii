@@ -8,7 +8,7 @@ description = "Tools for data collection and analysis at NSLS-II"
 readme = { file = "README.md", content-type = "text/markdown" }
 license = { file = "LICENSE" }
 authors = [{ name = "Brookhaven National Laboratory" }]
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.15"
 classifiers = [
   "Development Status :: 4 - Beta",
   "License :: OSI Approved :: BSD License",
@@ -16,6 +16,7 @@ classifiers = [
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Topic :: Scientific/Engineering :: Physics",
 ]
 dependencies = [
@@ -45,7 +46,6 @@ dependencies = [
   "redis",
   "redis-json-dict",
   "requests",
-  "shortuuid",
 ]
 dynamic = ["version"]
 
@@ -63,6 +63,7 @@ dev = [
   "pre-commit",
   "pytest",
   "pytest-asyncio",
+  "pytest-mock",
   "pytz",
   "ruff",
   "sphinx",
@@ -129,6 +130,9 @@ select = ["E4", "E7", "E9", "F"]
 channels = ["conda-forge"]
 platforms = ["linux-64"]
 
+[tool.pixi.dependencies]
+python = ">=3.11,<3.15"
+
 [tool.pixi.pypi-dependencies]
 nslsii = { path = ".", editable = true }
 
@@ -149,9 +153,13 @@ python = "3.12.*"
 [tool.pixi.feature.py313.dependencies]
 python = "3.13.*"
 
+[tool.pixi.feature.py314.dependencies]
+python = "3.14.*"
+
 [tool.pixi.environments]
 default = { solve-group = "default" }
 dev = { features = ["dev"], solve-group = "default" }
 py311 = ["dev", "py311"]
 py312 = ["dev", "py312"]
 py313 = ["dev", "py313"]
+py314 = ["dev", "py314"]
