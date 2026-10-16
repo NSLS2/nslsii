@@ -227,9 +227,9 @@ class QuadEMInternalTriggerLogic(DetectorTriggerLogic):
 
     Notes
     -----
-    Internal preparation accepts one exposure and zero deadtime only. It sets
-    single-acquisition mode, waits for plugins, and enables the supplied
-    statistics callbacks.
+    Preparation sets single-acquisition mode, waits for plugins, enables the
+    supplied statistics callbacks, and enables basic statistics computation on
+    those plugins.
     """
 
     driver: QuadEMDriverIO
@@ -257,6 +257,7 @@ class QuadEMInternalTriggerLogic(DetectorTriggerLogic):
             self.driver.num_acquire.set(1),
             self.driver.wait_for_plugins.set(True),
             *(stats.enable_callbacks.set(EnableDisable.ENABLE) for stats in self.stats),
+            *(stats.compute_statistics.set(True) for stats in self.stats),
         ]
         if livetime > 0:
             operations.append(self.driver.averaging_time.set(livetime))

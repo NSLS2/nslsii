@@ -118,6 +118,8 @@ async def test_quadem_preparation_and_lifecycle() -> None:
     device = QuadEM("TEST:QEM:", name="qem")
     await device.connect(mock=True)
     stats = _primary_stats(device)
+    for stats_plugin in stats:
+        set_mock_value(stats_plugin.compute_statistics, False)
 
     set_mock_value(device.driver.acquire, True)
     await device.stage()
@@ -131,6 +133,8 @@ async def test_quadem_preparation_and_lifecycle() -> None:
     for stats_plugin in stats:
         assert await stats_plugin.enable_callbacks.get_value() == EnableDisable.ENABLE
         assert get_mock_put(stats_plugin.enable_callbacks).await_args_list == [call(EnableDisable.ENABLE)]
+        assert await stats_plugin.compute_statistics.get_value() is True
+        assert get_mock_put(stats_plugin.compute_statistics).await_args_list == [call(True)]
 
     with pytest.raises(ValueError, match="nonzero deadtime"):
         await device.prepare(TriggerInfo(deadtime=0.01))
