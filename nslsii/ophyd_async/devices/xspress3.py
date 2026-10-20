@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 
-from collections.abc import Awaitable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Annotated as A, cast
 
 import numpy as np
@@ -420,6 +420,10 @@ _SCA_DATASETS = (
 )
 
 
+def _default_channel_key(detector_name: str, channel: int) -> str:
+    return f"{detector_name}-channel{channel}"
+
+
 class Xspress3HDFDataLogic(DetectorDataLogic):
     """Describe fixed Xspress3 datasets from one HDF capture.
 
@@ -442,8 +446,12 @@ class Xspress3HDFDataLogic(DetectorDataLogic):
     include_sca_streams : bool, optional
         Emit SCA NDAttribute stream resources.
     hinted_streams : sequence of str, optional
-        Detector-name-relative stream suffixes to hint. ``None`` hints the bulk
-        spectrum.
+        Full data-key names to hint. ``None`` hints the bulk spectrum; an empty
+        sequence disables hints.
+    channel_key_formatter : callable, optional
+        Map the detector name and physical channel number to its
+        spectrum data key. Defaults to ``f"{detector_name}-channel{channel}"``.
+        Must return stable, unique keys distinct from the bulk key.
     """
 
     datakey_suffix = ""
@@ -460,6 +468,7 @@ class Xspress3HDFDataLogic(DetectorDataLogic):
         include_roi_streams: bool = False,
         include_sca_streams: bool = False,
         hinted_streams: Sequence[str] | None = None,
+        channel_key_formatter: Callable[[str, int], str] = _default_channel_key,
     ) -> None:
         self.driver = driver
         self.channel_numbers = tuple(channel_numbers)
@@ -467,6 +476,7 @@ class Xspress3HDFDataLogic(DetectorDataLogic):
         self.include_roi_streams = include_roi_streams
         self.include_sca_streams = include_sca_streams
         self.hinted_streams = None if hinted_streams is None else tuple(hinted_streams)
+        self.channel_key_formatter = channel_key_formatter
         self._delegate = ADHDFDataLogic(
             array_description=array_description,
             path_provider=path_provider,
@@ -528,7 +538,7 @@ class Xspress3HDFDataLogic(DetectorDataLogic):
             )
         ]
         for channel in self.channel_numbers:
-            channel_key = f"{datakey_name}-channel{channel}"
+            channel_key = self.channel_key_formatter(datakey_name, channel)
             resources.append(
                 StreamResourceInfo(
                     data_key=channel_key,
@@ -571,10 +581,10 @@ class Xspress3HDFDataLogic(DetectorDataLogic):
         await self._delegate.stop()
 
     def get_hinted_fields(self, datakey_name: str) -> Sequence[str]:
-        """Return configured hints with the detector data-key prefix."""
+        """Return data-key names, or the bulk key by default."""
         if self.hinted_streams is None:
             return [datakey_name]
-        return [datakey_name if not suffix else f"{datakey_name}-{suffix}" for suffix in self.hinted_streams]
+        return self.hinted_streams
 
 
 class Xspress3HDFWriterFactory(ADWriterFactory[Xspress3HDFIO]):
@@ -591,15 +601,19 @@ class Xspress3HDFWriterFactory(ADWriterFactory[Xspress3HDFIO]):
     include_sca_streams : bool, optional
         Emit all canonical SCA NDAttribute streams.
     hinted_streams : sequence of str, optional
-        Detector-name-relative stream suffixes to hint, such as
-        ``"channel1-roi1"``. ``None`` hints the bulk spectrum; ``""`` selects
-        the bulk spectrum explicitly.
+        Full data-key names to hint. ``None`` hints the bulk spectrum; an empty
+        sequence disables hints.
+    channel_key_formatter : callable, optional
+        Map the detector name and physical channel number to its
+        spectrum data key. Defaults to ``f"{detector_name}-channel{channel}"``.
+        Must return stable, unique keys distinct from the bulk key.
     """
 
     path_provider: PathProvider
     include_roi_streams: bool
     include_sca_streams: bool
     hinted_streams: tuple[str, ...] | None
+    channel_key_formatter: Callable[[str, int], str]
 
     def __init__(
         self,
@@ -609,6 +623,7 @@ class Xspress3HDFWriterFactory(ADWriterFactory[Xspress3HDFIO]):
         include_roi_streams: bool = False,
         include_sca_streams: bool = False,
         hinted_streams: Sequence[str] | None = None,
+        channel_key_formatter: Callable[[str, int], str] = _default_channel_key,
     ) -> None:
         normalized_hints = None if hinted_streams is None else tuple(hinted_streams)
         if normalized_hints is not None and len(normalized_hints) != len(set(normalized_hints)):
@@ -618,6 +633,7 @@ class Xspress3HDFWriterFactory(ADWriterFactory[Xspress3HDFIO]):
         self.include_roi_streams = include_roi_streams
         self.include_sca_streams = include_sca_streams
         self.hinted_streams = normalized_hints
+        self.channel_key_formatter = channel_key_formatter
         super().__init__(
             writer_cls=Xspress3HDFIO,
             writer_suffix=writer_suffix,
@@ -627,27 +643,6 @@ class Xspress3HDFWriterFactory(ADWriterFactory[Xspress3HDFIO]):
             data_logic_factory=self._make_data_logic,
         )
 
-    def _validate_hinted_streams(
-        self,
-        channel_numbers: Sequence[int],
-        mca_roi_numbers: Sequence[int],
-    ) -> None:
-        if self.hinted_streams is None:
-            return
-        emitted_streams = {""}
-        for channel_number in channel_numbers:
-            channel_stream = f"channel{channel_number}"
-            emitted_streams.add(channel_stream)
-            if self.include_roi_streams:
-                emitted_streams.update(f"{channel_stream}-roi{roi_number}" for roi_number in mca_roi_numbers)
-            if self.include_sca_streams:
-                emitted_streams.update(f"{channel_stream}-{sca_name}" for sca_name in _SCA_NAMES)
-        missing = tuple(stream for stream in self.hinted_streams if stream not in emitted_streams)
-        if missing:
-            raise ValueError(
-                f"hinted_streams must refer to streams emitted by this writer; not emitted: {missing!r}"
-            )
-
     def _make_data_logic(
         self,
         writer: Xspress3HDFIO,
@@ -656,10 +651,6 @@ class Xspress3HDFWriterFactory(ADWriterFactory[Xspress3HDFIO]):
         _plugins: Sequence[NDPluginBaseIO],
     ) -> Xspress3HDFDataLogic:
         xspress3_driver = cast(Xspress3DriverIO, driver)
-        self._validate_hinted_streams(
-            xspress3_driver.channel_numbers,
-            xspress3_driver.mca_roi_numbers,
-        )
         return Xspress3HDFDataLogic(
             array_description,
             self.path_provider,
@@ -670,6 +661,7 @@ class Xspress3HDFWriterFactory(ADWriterFactory[Xspress3HDFIO]):
             include_roi_streams=self.include_roi_streams,
             include_sca_streams=self.include_sca_streams,
             hinted_streams=self.hinted_streams,
+            channel_key_formatter=self.channel_key_formatter,
         )
 
 

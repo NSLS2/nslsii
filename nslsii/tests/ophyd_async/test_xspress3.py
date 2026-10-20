@@ -179,7 +179,7 @@ def test_detector_is_topology_source_for_writer():
         writer_suffix="writer:",
         include_roi_streams=True,
         include_sca_streams=False,
-        hinted_streams=("channel1-roi2",),
+        hinted_streams=("xs-channel1-roi2",),
     )
     detector = Xspress3Detector(
         "XF:TEST{Xsp:1}:",
@@ -193,7 +193,7 @@ def test_detector_is_topology_source_for_writer():
     assert writer.writer_suffix == "writer:"
     assert writer.include_roi_streams is True
     assert writer.include_sca_streams is False
-    assert writer.hinted_streams == ("channel1-roi2",)
+    assert writer.hinted_streams == ("xs-channel1-roi2",)
     assert tuple(detector.channels) == (1, 4)
     assert all(tuple(channel.rois) == (2, 48) for channel in detector.channels.values())
 
@@ -224,38 +224,9 @@ def test_default_hints_bulk_spectrum():
     assert detector.hints == {"fields": ["xs"]}
 
 
-def test_configured_roi_hints_are_detector_prefixed():
-    detector = make_detector(
-        channel_numbers=(1, 2),
-        mca_roi_numbers=(1, 2),
-        include_roi_streams=True,
-        hinted_streams=("channel1-roi1", "channel2-roi2"),
-    )
-
-    assert detector.hints == {"fields": ["xs-channel1-roi1", "xs-channel2-roi2"]}
-
-
-@pytest.mark.parametrize(
-    ("kwargs", "match"),
-    [
-        ({"hinted_streams": ("channel2",)}, "not emitted"),
-        ({"hinted_streams": ("channel1-roi1",)}, "not emitted"),
-        ({"hinted_streams": ("channel1-all_good",)}, "not emitted"),
-        ({"hinted_streams": ("unknown",)}, "not emitted"),
-        (
-            {
-                "mca_roi_numbers": (1,),
-                "include_roi_streams": True,
-                "hinted_streams": ("channel1-roi2",),
-            },
-            "not emitted",
-        ),
-        ({"hinted_streams": ("channel1", "channel1")}, "unique"),
-    ],
-)
-def test_invalid_hinted_streams_fail_during_detector_construction(kwargs, match):
-    with pytest.raises(ValueError, match=match):
-        make_detector(**kwargs)
+def test_duplicate_hinted_streams_fail_during_writer_construction():
+    with pytest.raises(ValueError, match="unique"):
+        make_detector(hinted_streams=("xs-channel1", "xs-channel1"))
 
 
 @pytest.mark.asyncio
@@ -474,6 +445,102 @@ async def test_all_data_views_describe_and_emit_advancing_stream_documents():
     assert {name for name, _ in second_docs} == {"stream_datum"}
     assert all(document["indices"] == {"start": 1, "stop": 2} for _, document in second_docs)
     await detector.unstage()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("detector_name", "channel_numbers", "expected_keys"),
+    [
+        (
+            "7-element SDD",
+            tuple(range(1, 8)),
+            (
+                "7-element SDD_channel01_xrf",
+                "7-element SDD_channel02_xrf",
+                "7-element SDD_channel03_xrf",
+                "7-element SDD_channel04_xrf",
+                "7-element SDD_channel05_xrf",
+                "7-element SDD_channel06_xrf",
+                "7-element SDD_channel07_xrf",
+            ),
+        ),
+        (
+            "4-element SDD",
+            (1, 2, 3, 4),
+            (
+                "4-element SDD_channel01_xrf",
+                "4-element SDD_channel02_xrf",
+                "4-element SDD_channel03_xrf",
+                "4-element SDD_channel04_xrf",
+            ),
+        ),
+        ("1-element SDD", (8,), ("1-element SDD_channel08_xrf",)),
+    ],
+)
+async def test_formatted_channel_keys_match_explicit_hints_and_stream_resources(
+    detector_name, channel_numbers, expected_keys
+):
+    def bmm_spectrum_key(detector_name: str, channel: int) -> str:
+        return f"{detector_name}_channel{channel:02d}_xrf"
+
+    writer = Xspress3HDFWriterFactory(
+        StaticPathProvider(StaticFilenameProvider("xspress3"), PurePath("/tmp")),
+        channel_key_formatter=bmm_spectrum_key,
+        include_roi_streams=True,
+        include_sca_streams=True,
+        hinted_streams=(
+            detector_name,
+            expected_keys[0],
+            f"{expected_keys[-1]}-roi2",
+            f"{expected_keys[0]}-all_good",
+        ),
+    )
+    detector = Xspress3Detector(
+        "XF:TEST{Xsp:1}:",
+        writer,
+        channel_numbers=channel_numbers,
+        mca_roi_numbers=(2,),
+        name=detector_name,
+    )
+    await connect_and_seed(detector)
+    await detector.stage()
+    try:
+        await detector.prepare(TriggerInfo())
+        description = await detector.describe()
+        assert description[detector_name]["shape"] == [1, max(channel_numbers), 4096]
+        assert detector.hints == {
+            "fields": [
+                detector_name,
+                expected_keys[0],
+                f"{expected_keys[-1]}-roi2",
+                f"{expected_keys[0]}-all_good",
+            ]
+        }
+        assert set(detector.hints["fields"]) <= description.keys()
+
+        set_mock_value(detector.hdf.num_captured, 1)
+        resources = {
+            doc["data_key"]: doc
+            async for name, doc in detector.collect_asset_docs()
+            if name == "stream_resource"
+        }
+        assert resources.keys() == description.keys()
+        for channel, key in zip(channel_numbers, expected_keys, strict=True):
+            assert f"{detector_name}-channel{channel}" not in description
+            assert description[key]["shape"] == [1, 4096]
+            assert resources[key]["parameters"] == {
+                "chunk_shape": (1, 4096),
+                "dataset": "/entry/data/data",
+                "slice": f":,{channel - 1},:",
+            }
+            assert resources[f"{key}-roi2"]["parameters"]["dataset"] == (
+                f"/entry/instrument/NDAttributes/CHAN{channel}ROI2"
+            )
+            assert resources[f"{key}-all_good"]["parameters"]["dataset"] == (
+                f"/entry/instrument/NDAttributes/CHAN{channel}SCA4"
+            )
+    finally:
+        await detector.unstage()
 
 
 @pytest.mark.asyncio
