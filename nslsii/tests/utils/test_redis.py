@@ -8,7 +8,7 @@ import pytest
 import sys
 
 import nslsii
-from nslsii.utils import open_redis_client
+from nslsii.utils.redis import open_redis_client
 from nslsii.sync_experiment.sync_experiment import switch_proposal
 
 # The __init__.py of nslsii.sync_experiment re-exports a function called
@@ -22,9 +22,9 @@ _sync_mod = sys.modules["nslsii.sync_experiment.sync_experiment"]
 # ---------------------------------------------------------------------------
 
 
-@patch("nslsii.utils.os.getenv", return_value=None)
-@patch("nslsii.utils.socket.gethostname", return_value="xf12id1-ws1")
-@patch("nslsii.utils.Redis")
+@patch("nslsii.utils.redis.os.getenv", return_value=None)
+@patch("nslsii.utils.redis.socket.gethostname", return_value="xf12id1-ws1")
+@patch("nslsii.utils.redis.Redis")
 def test_open_redis_client_uses_redis_location_for_ssl(
     mock_redis, mock_hostname, mock_getenv
 ):
@@ -38,8 +38,8 @@ def test_open_redis_client_uses_redis_location_for_ssl(
     assert call_kwargs["ssl"] is True
 
 
-@patch("nslsii.utils.os.getenv", return_value=None)
-@patch("nslsii.utils.Redis")
+@patch("nslsii.utils.redis.os.getenv", return_value=None)
+@patch("nslsii.utils.redis.Redis")
 def test_open_redis_client_passes_redis_db(mock_redis, mock_getenv):
     """redis_db should be forwarded to the Redis constructor."""
     open_redis_client(redis_url="localhost", redis_db=3)
