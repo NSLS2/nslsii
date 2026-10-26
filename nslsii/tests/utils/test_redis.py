@@ -106,8 +106,11 @@ def test_configure_base_passes_redis_db(mock_open_rc):
 
 
 @pytest.fixture()
-def switch_mocks():
+def switch_mocks(monkeypatch):
     """Patch all external dependencies of switch_proposal and yield a dict of mocks."""
+    # Beamline workstations set these; they would override the test arguments.
+    monkeypatch.delenv("BEAMLINE_ACRONYM", raising=False)
+    monkeypatch.delenv("ENDSTATION_ACRONYM", raising=False)
     md = {
         "data_sessions_authorized": ["pass-123456"],
         "username": "testuser",
@@ -133,34 +136,32 @@ def switch_mocks():
         yield {"open_redis_client": mock_open_rc, "RedisJSONDict": mock_rjd}
 
 
-def test_switch_proposal_ssl_no_prefix(switch_mocks):
-    """With redis_ssl=True the RedisJSONDict prefix should be empty."""
-    switch_proposal(123456, beamline="SMI", username="testuser", redis_ssl=True)
-
-    mock_rjd = switch_mocks["RedisJSONDict"]
-    mock_rjd.assert_called_once()
-    assert mock_rjd.call_args[1]["prefix"] == ""
-
-
-def test_switch_proposal_endstation_no_ssl(switch_mocks):
-    """With an endstation and no SSL, prefix should identify beamline and endstation."""
+@pytest.mark.parametrize(
+    "beamline, endstation, expected_prefix",
+    [
+        ("SMI", None, "smi-md-"),
+        ("SMI", "opls", "smi-opls-md-"),
+        ("sst1", None, "sst-md-"),
+    ],
+)
+def test_switch_proposal_redis_prefix(
+    switch_mocks, beamline, endstation, expected_prefix
+):
+    """The metadata prefix is built from the normalized beamline and endstation."""
     switch_proposal(
-        123456, beamline="SMI", username="testuser", endstation="opls", redis_ssl=False
+        123456, beamline=beamline, username="testuser", endstation=endstation
     )
 
     mock_rjd = switch_mocks["RedisJSONDict"]
     mock_rjd.assert_called_once()
-    assert mock_rjd.call_args[1]["prefix"] == "smi-opls-"
+    assert mock_rjd.call_args[1]["prefix"] == expected_prefix
 
 
-def test_switch_proposal_passes_redis_db(switch_mocks):
-    """redis_db should be forwarded to open_redis_client."""
-    switch_proposal(
-        123456, beamline="SMI", username="testuser", redis_db=7, redis_ssl=False
-    )
+def test_switch_proposal_opens_default_redis_client(switch_mocks):
+    """Redis connection settings are no longer passed through switch_proposal."""
+    switch_proposal(123456, beamline="SMI", username="testuser")
 
-    call_kwargs = switch_mocks["open_redis_client"].call_args[1]
-    assert call_kwargs["redis_db"] == 7
+    switch_mocks["open_redis_client"].assert_called_once_with()
 
 
 def test_revoke_active_api_key_clears_unusable_key():
