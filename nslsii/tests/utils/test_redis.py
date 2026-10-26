@@ -164,6 +164,44 @@ def test_switch_proposal_opens_default_redis_client(switch_mocks):
     switch_mocks["open_redis_client"].assert_called_once_with()
 
 
+@pytest.mark.parametrize("stored", [b"abcd1234", "abcd1234"])
+def test_get_api_key_returns_str(stored):
+    """Redis returns bytes unless decoding is on; the key must always be a str."""
+    redis_client = MagicMock()
+    redis_client.get.return_value = stored
+
+    assert _sync_mod.get_api_key(redis_client, "smi", None) == "abcd1234"
+
+
+def test_get_api_key_returns_none_when_unset():
+    redis_client = MagicMock()
+    redis_client.get.return_value = None
+
+    assert _sync_mod.get_api_key(redis_client, "smi", None) is None
+
+
+@pytest.mark.parametrize(
+    "proposal, match",
+    [
+        ({"instruments": None, "cycles": ["2026-3"]}, "not at this beamline"),
+        ({"instruments": ["SMI"], "cycles": None}, "not allocated for the current"),
+    ],
+)
+def test_retrieve_proposals_null_lists_raise_value_error(proposal, match):
+    """nsls2api may return null lists; they must fail validation, not TypeError."""
+    response = MagicMock()
+    response.json.return_value = {"proposal": {"proposal_id": "123456", **proposal}}
+
+    with (
+        patch.object(_sync_mod, "get_current_cycle", return_value="2026-3"),
+        patch.object(_sync_mod, "get_commissioning_proposals", return_value=[]),
+        patch.object(_sync_mod, "facility_api_client") as mock_api,
+    ):
+        mock_api.get.return_value = response
+        with pytest.raises(ValueError, match=match):
+            _sync_mod.retrieve_proposals("nsls2", "smi", ["123456"])
+
+
 def test_revoke_active_api_key_clears_unusable_key():
     redis_client = MagicMock()
     tiled_context = MagicMock()

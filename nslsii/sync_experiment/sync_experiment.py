@@ -1,7 +1,6 @@
 import argparse
 import importlib.metadata
 import httpx
-import json
 import os
 import re
 
@@ -78,7 +77,7 @@ def sync_experiment(
     for proposal_id in proposal_ids:
         if not re.fullmatch(r"^\d{6}$", proposal_id):
             raise ValueError(
-                f"Provided proposal ID '{proposal_id}' is not valid.\n "
+                f"Provided proposal ID '{proposal_id}' is not valid.\n"
                 f"A proposal ID must be a 6 character integer."
             )
     if activate_proposal not in proposal_ids:
@@ -97,7 +96,7 @@ def sync_experiment(
     print(
         f"Attempting to sync experiment for proposal ID(s) {(', ').join(proposal_ids)}.\n"
     )
-    print("Please login to Tiled with your BNL credentials.")
+    print("Please log in to Tiled with your BNL credentials.")
 
     tiled_context, username = create_tiled_context(normalized_beamline, endstation)
 
@@ -136,7 +135,7 @@ def sync_experiment(
     proposal = proposals[activate_proposal]
 
     md["data_sessions_authorized"] = list(data_sessions)
-    users = proposal.pop("users")
+    users = proposal.pop("users", None) or []
     pi_name = ""
     for user in users:
         if user.get("is_pi"):
@@ -250,7 +249,7 @@ def unsync_experiment(
     print(f"Deactivated experiment with data session {data_session} by {username}.")
 
     if verbose:
-        print(json.dumps(md, indent=2))
+        print(md)
 
     return md
 
@@ -270,7 +269,7 @@ def switch_proposal(
     proposal_id : int or str
         the ID number of the proposal to activate
     username : str or None (optional)
-        the current user's username - will prompt if no provided.
+        the current user's username - will prompt if not provided.
     facility : str (optional)
         the facility that the beamline belongs to (defaults to "nsls2")
     beamline : str or None (optional)
@@ -335,7 +334,7 @@ def switch_proposal(
     proposals = retrieve_proposals(facility, beamline, [activate_proposal])
     proposal = proposals[activate_proposal]
 
-    users = proposal.pop("users")
+    users = proposal.pop("users", None) or []
     pi_name = ""
     for user in users:
         if user.get("is_pi"):
@@ -360,8 +359,11 @@ def switch_proposal(
     }
 
     print(
-        f"Switched to experiment wihh data session {md['data_session']} by {md['username']}."
+        f"Switched to experiment with data session {md['data_session']} by {md['username']}."
     )
+
+    if verbose:
+        print(md)
 
     return md
 
@@ -529,6 +531,9 @@ def get_api_key(redis_client, beamline, endstation):
         if endstation else f"{beamline}-tiled-apikey"
     )
     api_key = redis_client.get(f"{redis_key}")
+    # Redis returns bytes unless the client decodes responses; Tiled needs a str.
+    if isinstance(api_key, bytes):
+        api_key = api_key.decode()
 
     return api_key
 
@@ -599,18 +604,21 @@ def retrieve_proposals(facility, beamline, proposal_ids):
         proposal_response = facility_api_client.get(f"/v1/proposal/{proposal_id}")
         proposal_response.raise_for_status()
         proposal = proposal_response.json()["proposal"]
-        if beamline.upper() not in proposal["instruments"]:
+        # nsls2api allows these lists to be null; treat null as empty.
+        instruments = proposal.get("instruments") or []
+        cycles = proposal.get("cycles") or []
+        if beamline.upper() not in instruments:
             raise ValueError(
-                f"Proposal {proposal_id} is not at this beamline ({beamline.upper()})."
-                f"This proposal is at the following beamline(s): {', '.join(proposal['instruments'])}."
+                f"Proposal {proposal_id} is not at this beamline ({beamline.upper()}). "
+                f"This proposal is at the following beamline(s): {', '.join(instruments) or '<none>'}."
             )
         is_commissioning_proposal = proposal_id in commissioning_proposals
         if num_proposals > 1 and is_commissioning_proposal:
             raise ValueError(
-                f"Cannot authorize multiple experiments alongside a commmissioning proposal."
+                "Cannot authorize multiple experiments alongside a commissioning proposal. "
                 f"Proposal {proposal_id} is a commissioning proposal."
             )
-        if not is_commissioning_proposal and current_cycle not in proposal["cycles"]:
+        if not is_commissioning_proposal and current_cycle not in cycles:
             raise ValueError(
                 f"Proposal {proposal_id} is not allocated for the current {facility.upper()} cycle ({current_cycle})."
             )
