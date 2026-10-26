@@ -4,7 +4,6 @@ import httpx
 import json
 import os
 import re
-import redis
 
 from datetime import datetime
 from redis_json_dict import RedisJSONDict
@@ -37,8 +36,6 @@ def sync_experiment(
     facility: str = "nsls2",
     beamline: str | None = None,
     endstation: str | None = None,
-    redis_db: int = 0,
-    redis_ssl: bool = False,
     verbose: bool = False,
 ) -> RedisJSONDict:
     """Sync a new experiment (proposal) at the beamline.
@@ -56,10 +53,6 @@ def sync_experiment(
         the TLA of the beamline from which the experiment is running, not case-sensitive
     endstation : str or None (optional)
         the endstation at the beamline from which the experiment is running, not case-sensitive
-    redis_db : int (optional)
-        the Redis database index to use for the md Redis client (defaults to 0)
-    redis_ssl : bool (optional)
-        use SSL for Redis connections (defaults to False)
     verbose : bool (optional)
         turn on verbose printing
 
@@ -96,13 +89,7 @@ def sync_experiment(
         endstation = endstation.lower()
     normalized_beamline = normalized_beamlines[beamline]
 
-    # to-do:make this client use secure Redis (for API key storage)
-    apikey_redis_client = redis.Redis(
-        host=f"info.{normalized_beamline}.nsls2.bnl.gov",
-        port=6379,
-        db=15,
-        decode_responses=True,
-    )
+    apikey_redis_client = open_redis_client()
 
     print(f"\nWelcome to the {beamline.upper()} beamline at {facility.upper()}!\n")
     if endstation:
@@ -134,25 +121,15 @@ def sync_experiment(
         finally:
             tiled_context.close()
 
-    redis_location = (
-        f"{normalized_beamline}-{endstation}" if endstation else f"{normalized_beamline}"
+    md_redis_prefix = (
+        f"{normalized_beamline}-{endstation}-md-"
+        if endstation else f"{normalized_beamline}-md-"
     )
-
-    md_redis_client = open_redis_client(
-        redis_ssl=redis_ssl,
-        redis_location=redis_location,
-        redis_db=redis_db,
-        redis_url=(
-            f"info.{normalized_beamline}.nsls2.bnl.gov"
-            if not redis_ssl
-            else None
-        ),
-    )
+    md_redis_client = open_redis_client()
 
     if verbose:
         print(f"Redis connection info: {md_redis_client.client().connection}")
 
-    md_redis_prefix = f"{redis_location}-" if not redis_ssl else ""
     md = RedisJSONDict(redis_client=md_redis_client, prefix=md_redis_prefix)
 
     activate_session = "pass-" + activate_proposal
@@ -200,8 +177,6 @@ def unsync_experiment(
     facility: str = "nsls2",
     beamline: str | None = None,
     endstation: str | None = None,
-    redis_db: int = 0,
-    redis_ssl: bool = False,
     verbose: bool = False,
 ) -> RedisJSONDict:
     """Unsync the currently active experiment (proposal) at the beamline.
@@ -215,10 +190,6 @@ def unsync_experiment(
         the TLA of the beamline from which the experiment is running, not case-sensitive
     endstation : str or None (optional)
         the endstation at the beamline from which the experiment is running, not case-sensitive
-    redis_db : int (optional)
-        the Redis database index to use for the md Redis client (defaults to 0)
-    redis_ssl : bool (optional)
-        use SSL for Redis connections (defaults to False)
     verbose : bool (optional)
         turn on verbose printing
 
@@ -241,32 +212,17 @@ def unsync_experiment(
     if endstation:
         endstation = endstation.lower()
     normalized_beamline = normalized_beamlines[beamline]
-    apikey_redis_client = redis.Redis(
-        host=f"info.{normalized_beamline}.nsls2.bnl.gov",
-        port=6379,
-        db=15,
-        decode_responses=True,
-    )
+    apikey_redis_client = open_redis_client()
 
-    redis_location = (
-        f"{normalized_beamline}-{endstation}" if endstation else f"{normalized_beamline}"
+    md_redis_prefix = (
+        f"{normalized_beamline}-{endstation}-md-"
+        if endstation else f"{normalized_beamline}-md-"
     )
-
-    md_redis_client = open_redis_client(
-        redis_ssl=redis_ssl,
-        redis_location=redis_location,
-        redis_db=redis_db,
-        redis_url=(
-            f"info.{normalized_beamline}.nsls2.bnl.gov"
-            if not redis_ssl
-            else None
-        ),
-    )
+    md_redis_client = open_redis_client()
 
     if verbose:
         print(f"Redis connection info: {md_redis_client.client().connection}")
 
-    md_redis_prefix = f"{redis_location}-" if not redis_ssl else ""
     md = RedisJSONDict(redis_client=md_redis_client, prefix=md_redis_prefix)
 
     revoke_active_api_key(apikey_redis_client, normalized_beamline, endstation)
@@ -305,8 +261,6 @@ def switch_proposal(
     facility: str = "nsls2",
     beamline: str | None = None,
     endstation: str | None = None,
-    redis_db: int = 0,
-    redis_ssl: bool = False,
     verbose: bool = False,
 ) -> RedisJSONDict:
     """Switch the active experiment (proposal) at the beamline.
@@ -323,10 +277,6 @@ def switch_proposal(
         the TLA of the beamline from which the experiment is running, not case-sensitive
     endstation : str or None (optional)
         the endstation at the beamline from which the experiment is running, not case-sensitive
-    redis_db : int (optional)
-        the Redis database index to use for the md Redis client (defaults to 0)
-    redis_ssl : bool (optional)
-        use SSL for Redis connections (defaults to False)
     verbose : bool (optional)
         turn on verbose printing
 
@@ -351,25 +301,15 @@ def switch_proposal(
     normalized_beamline = normalized_beamlines[beamline]
     username = username or input("Enter your username: ")
 
-    redis_location = (
-        f"{normalized_beamline}-{endstation}" if endstation else f"{normalized_beamline}"
+    md_redis_prefix = (
+        f"{normalized_beamline}-{endstation}-md-"
+        if endstation else f"{normalized_beamline}-md-"
     )
-
-    md_redis_client = open_redis_client(
-        redis_ssl=redis_ssl,
-        redis_location=redis_location,
-        redis_db=redis_db,
-        redis_url=(
-            f"info.{normalized_beamline}.nsls2.bnl.gov"
-            if not redis_ssl
-            else None
-        ),
-    )
+    md_redis_client = open_redis_client()
 
     if verbose:
         print(f"Redis connection info: {md_redis_client.client().connection}")
 
-    md_redis_prefix = f"{redis_location}-" if not redis_ssl else ""
     md = RedisJSONDict(redis_client=md_redis_client, prefix=md_redis_prefix)
 
     activate_proposal = str(proposal_id)
@@ -566,13 +506,14 @@ def set_api_key(redis_client, beamline, endstation, api_key):
     Use to set the active API key in Redis.
 
     The active API key is stored with key:
-    <beamline tla>-<endstation acronym>-apikey-active
+    <beamline tla>-<endstation acronym>-tiled-apikey
 
     """
-    redis_prefix = (
-        f"{beamline}-{endstation}-apikey" if endstation else f"{beamline}-apikey"
+    redis_key = (
+        f"{beamline}-{endstation}-tiled-apikey"
+        if endstation else f"{beamline}-tiled-apikey"
     )
-    redis_client.set(f"{redis_prefix}-active", api_key)
+    redis_client.set(f"{redis_key}", api_key)
 
 
 def get_api_key(redis_client, beamline, endstation):
@@ -580,13 +521,14 @@ def get_api_key(redis_client, beamline, endstation):
     Use to get the active API key in Redis.
 
     The active API key is stored with key:
-    <beamline tla>-<endstation acronym>-apikey-active
+    <beamline tla>-<endstation acronym>-tiled-apikey
 
     """
-    redis_prefix = (
-        f"{beamline}-{endstation}-apikey" if endstation else f"{beamline}-apikey"
+    redis_key = (
+        f"{beamline}-{endstation}-tiled-apikey"
+        if endstation else f"{beamline}-tiled-apikey"
     )
-    api_key = redis_client.get(f"{redis_prefix}-active")
+    api_key = redis_client.get(f"{redis_key}")
 
     return api_key
 
@@ -749,21 +691,6 @@ def main():
         action="store_true",
     )
     parser.add_argument(
-        "-d",
-        "--database",
-        dest="redis_db",
-        type=int,
-        default=0,
-        help="Redis database index",
-    )
-    parser.add_argument(
-        "-S",
-        "--enable-ssl",
-        dest="redis_ssl",
-        action="store_true",
-        help="Enable SSL for Redis connections",
-    )
-    parser.add_argument(
         "-V",
         "--version",
         action="version",
@@ -780,8 +707,6 @@ def main():
             facility=args.facility,
             beamline=args.beamline,
             endstation=args.endstation,
-            redis_db=args.redis_db,
-            redis_ssl=args.redis_ssl,
             verbose=args.verbose,
         )
     elif args.switch is not None:
@@ -790,8 +715,6 @@ def main():
             beamline=args.beamline,
             endstation=args.endstation,
             proposal_id=args.switch,
-            redis_db=args.redis_db,
-            redis_ssl=args.redis_ssl,
             verbose=args.verbose,
         )
     else:
@@ -801,7 +724,5 @@ def main():
             endstation=args.endstation,
             proposal_ids=args.proposals,
             activate_id=args.activate,
-            redis_db=args.redis_db,
-            redis_ssl=args.redis_ssl,
             verbose=args.verbose,
         )
