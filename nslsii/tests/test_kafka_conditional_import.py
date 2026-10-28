@@ -15,6 +15,7 @@ def test_conditional_import_negative_case():
     of other tests.
     """
     the_test = """
+import os
 import sys
 from unittest.mock import Mock
 
@@ -23,11 +24,11 @@ import IPython.core.interactiveshell
 import nslsii
 
 
+os.environ["BEAMLINE_ACRONYM"] = "tst"
 ip = IPython.core.interactiveshell.InteractiveShell()
 nslsii.configure_base(
     user_ns=ip.user_ns,
     redis_url = "localhost",
-    redis_prefix = "",
     # a mock databroker will be enough for this test
     broker_name=Mock(),
     bec=False,
@@ -88,6 +89,7 @@ def test_conditional_import_positive_case(tmp_path):
         f.write(test_bluesky_kafka_config)
 
     the_test = f"""
+import os
 import sys
 from unittest.mock import Mock
 
@@ -96,11 +98,11 @@ import IPython.core.interactiveshell
 import nslsii
 
 
+os.environ["BEAMLINE_ACRONYM"] = "tst"
 ip = IPython.core.interactiveshell.InteractiveShell()
 nslsii.configure_base(
     user_ns=ip.user_ns,
     redis_url = "localhost",
-    redis_prefix = "",
     # a mock databroker will be enough for this test
     broker_name=Mock(),
     bec=False,

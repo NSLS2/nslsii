@@ -43,6 +43,38 @@ redis_hosts = [
     "xf31id1-tst-redis1.nsls2.bnl.gov",
 ]
 
+# Beamlines whose endstations share one Redis namespace.
+_beamline_aliases = {
+    "sst1": "sst",
+    "sst2": "sst",
+}
+
+
+def normalize_beamline(beamline: str) -> str:
+    """Lowercase a beamline acronym and collapse aliases (e.g. ``sst1`` -> ``sst``)."""
+    beamline = beamline.lower()
+    return _beamline_aliases.get(beamline, beamline)
+
+
+def md_redis_prefix(beamline: str, endstation: str | None = None) -> str:
+    """
+    Redis key prefix for RunEngine metadata at a beamline (and optional endstation).
+
+    ``sync-experiment`` writes metadata under this prefix and ``configure_base``
+    reads it back, so both must derive it here. The ``-md-`` segment keeps
+    ``RedisJSONDict`` from scanning unrelated keys (e.g. the Tiled API key)
+    stored in the same database.
+    """
+    beamline = normalize_beamline(beamline)
+    if endstation:
+        return f"{beamline}-{endstation.lower()}-md-"
+    return f"{beamline}-md-"
+
+
+def get_beamline_env() -> tuple[str | None, str | None]:
+    """``BEAMLINE_ACRONYM`` and ``ENDSTATION_ACRONYM`` from the environment."""
+    return os.getenv("BEAMLINE_ACRONYM"), os.getenv("ENDSTATION_ACRONYM")
+
 
 def open_redis_client(
     redis_url=None,

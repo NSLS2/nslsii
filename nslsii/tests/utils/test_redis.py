@@ -53,47 +53,67 @@ def test_open_redis_client_passes_redis_db(mock_redis, mock_getenv):
 # ---------------------------------------------------------------------------
 
 
+_configure_base_minimal = dict(
+    broker_name=MagicMock(),
+    bec=False,
+    epics_context=False,
+    magics=False,
+    mpl=False,
+    configure_logging=False,
+    pbar=False,
+    ipython_logging=False,
+)
+
+
+@pytest.mark.parametrize(
+    "beamline, endstation, expected_prefix",
+    [
+        ("SMI", None, "smi-md-"),
+        ("SMI", "opls", "smi-opls-md-"),
+        ("sst1", None, "sst-md-"),
+    ],
+)
 @patch("nslsii.open_redis_client")
-def test_configure_base_raises_on_redis_prefix_and_ssl(mock_open_rc):
-    """ValueError should be raised when redis_prefix and redis_ssl are both set."""
-    ns = {}
+def test_configure_base_redis_prefix_from_env(
+    mock_open_rc, monkeypatch, beamline, endstation, expected_prefix
+):
+    """RE.md must read the same prefix that sync-experiment writes."""
+    monkeypatch.setenv("BEAMLINE_ACRONYM", beamline)
+    if endstation is None:
+        monkeypatch.delenv("ENDSTATION_ACRONYM", raising=False)
+    else:
+        monkeypatch.setenv("ENDSTATION_ACRONYM", endstation)
 
-    with patch("redis_json_dict.RedisJSONDict", return_value={}):
-        with pytest.raises(ValueError, match="Incompatible arguments"):
-            nslsii.configure_base(
-                user_ns=ns,
-                broker_name=MagicMock(),
-                redis_url="localhost",
-                redis_prefix="arpes-",
-                redis_ssl=True,
-                bec=False,
-                epics_context=False,
-                magics=False,
-                mpl=False,
-                configure_logging=False,
-                pbar=False,
-                ipython_logging=False,
-            )
+    with patch("redis_json_dict.RedisJSONDict", return_value={}) as mock_rjd:
+        nslsii.configure_base(
+            user_ns={}, redis_url="localhost", **_configure_base_minimal
+        )
+
+    mock_rjd.assert_called_once()
+    assert mock_rjd.call_args[1]["prefix"] == expected_prefix
 
 
 @patch("nslsii.open_redis_client")
-def test_configure_base_passes_redis_db(mock_open_rc):
+def test_configure_base_requires_beamline_env_for_redis(mock_open_rc, monkeypatch):
+    """Without BEAMLINE_ACRONYM the metadata prefix is undefined; fail before connecting."""
+    monkeypatch.delenv("BEAMLINE_ACRONYM", raising=False)
+
+    with pytest.raises(ValueError, match="BEAMLINE_ACRONYM"):
+        nslsii.configure_base(
+            user_ns={}, redis_url="localhost", **_configure_base_minimal
+        )
+
+    mock_open_rc.assert_not_called()
+
+
+@patch("nslsii.open_redis_client")
+def test_configure_base_passes_redis_db(mock_open_rc, monkeypatch):
     """redis_db should be forwarded to open_redis_client."""
-    ns = {}
+    monkeypatch.setenv("BEAMLINE_ACRONYM", "smi")
 
     with patch("redis_json_dict.RedisJSONDict", return_value={}):
         nslsii.configure_base(
-            user_ns=ns,
-            broker_name=MagicMock(),
-            redis_url="localhost",
-            redis_db=5,
-            bec=False,
-            epics_context=False,
-            magics=False,
-            mpl=False,
-            configure_logging=False,
-            pbar=False,
-            ipython_logging=False,
+            user_ns={}, redis_url="localhost", redis_db=5, **_configure_base_minimal
         )
 
     call_kwargs = mock_open_rc.call_args[1]

@@ -9,24 +9,15 @@ from redis_json_dict import RedisJSONDict
 from tiled.client.context import Context, device_code_grant, identity_provider_input
 from tiled.profiles import load_profiles
 
-from nslsii.utils import open_redis_client
+from nslsii.utils import (
+    get_beamline_env,
+    md_redis_prefix,
+    normalize_beamline,
+    open_redis_client,
+)
 
 
 facility_api_client = httpx.Client(base_url="https://api.nsls2.bnl.gov")
-
-
-class KeyRemapper(dict):
-    def __missing__(self, key):
-        self[key] = key
-        return key
-
-
-normalized_beamlines = KeyRemapper(
-    {
-        "sst1": "sst",
-        "sst2": "sst",
-    }
-)
 
 
 def sync_experiment(
@@ -86,7 +77,7 @@ def sync_experiment(
     beamline = beamline.lower()
     if endstation:
         endstation = endstation.lower()
-    normalized_beamline = normalized_beamlines[beamline]
+    normalized_beamline = normalize_beamline(beamline)
 
     apikey_redis_client = open_redis_client()
 
@@ -120,16 +111,14 @@ def sync_experiment(
         finally:
             tiled_context.close()
 
-    md_redis_prefix = (
-        f"{normalized_beamline}-{endstation}-md-"
-        if endstation else f"{normalized_beamline}-md-"
-    )
     md_redis_client = open_redis_client()
 
     if verbose:
         print(f"Redis connection info: {md_redis_client.client().connection}")
 
-    md = RedisJSONDict(redis_client=md_redis_client, prefix=md_redis_prefix)
+    md = RedisJSONDict(
+        redis_client=md_redis_client, prefix=md_redis_prefix(beamline, endstation)
+    )
 
     activate_session = "pass-" + activate_proposal
     proposal = proposals[activate_proposal]
@@ -210,19 +199,17 @@ def unsync_experiment(
     beamline = beamline.lower()
     if endstation:
         endstation = endstation.lower()
-    normalized_beamline = normalized_beamlines[beamline]
+    normalized_beamline = normalize_beamline(beamline)
     apikey_redis_client = open_redis_client()
 
-    md_redis_prefix = (
-        f"{normalized_beamline}-{endstation}-md-"
-        if endstation else f"{normalized_beamline}-md-"
-    )
     md_redis_client = open_redis_client()
 
     if verbose:
         print(f"Redis connection info: {md_redis_client.client().connection}")
 
-    md = RedisJSONDict(redis_client=md_redis_client, prefix=md_redis_prefix)
+    md = RedisJSONDict(
+        redis_client=md_redis_client, prefix=md_redis_prefix(beamline, endstation)
+    )
 
     revoke_active_api_key(apikey_redis_client, normalized_beamline, endstation)
     data_sessions_deauthorized = md.get("data_sessions_authorized") or [
@@ -297,19 +284,16 @@ def switch_proposal(
     beamline = beamline.lower()
     if endstation:
         endstation = endstation.lower()
-    normalized_beamline = normalized_beamlines[beamline]
     username = username or input("Enter your username: ")
 
-    md_redis_prefix = (
-        f"{normalized_beamline}-{endstation}-md-"
-        if endstation else f"{normalized_beamline}-md-"
-    )
     md_redis_client = open_redis_client()
 
     if verbose:
         print(f"Redis connection info: {md_redis_client.client().connection}")
 
-    md = RedisJSONDict(redis_client=md_redis_client, prefix=md_redis_prefix)
+    md = RedisJSONDict(
+        redis_client=md_redis_client, prefix=md_redis_prefix(beamline, endstation)
+    )
 
     activate_proposal = str(proposal_id)
     activate_session = "pass-" + activate_proposal
@@ -625,12 +609,6 @@ def retrieve_proposals(facility, beamline, proposal_ids):
         proposals[proposal_id] = proposal
 
     return proposals
-
-
-def get_beamline_env():
-    beamline = os.getenv("BEAMLINE_ACRONYM")
-    endstation = os.getenv("ENDSTATION_ACRONYM")
-    return beamline, endstation
 
 
 def main():
