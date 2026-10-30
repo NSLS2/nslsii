@@ -29,16 +29,16 @@ DOCUMENT_FILE_ROTATION = (100 * 1024 * 1024, 1)
 # Logger of the Bluesky document lines. Each record carries the line's fields
 # as its ``document_fields`` attribute.
 DOCUMENT_LOGGER_NAME = "nslsii.documents"
-# The pointer fields of each document type: uids, links to other documents,
-# positions within streams and resources, and a few identifiers. Data,
-# configuration, metadata, file paths, and the document's own timestamp are
-# *not* included.
-POINTER_FIELDS: dict[str, tuple[str, ...]] = {
+# The fields of each document type kept in its summary: uids, links to other
+# documents, positions within streams and resources, a few identifiers, and
+# the stop reason. Data, configuration, metadata, file paths, and the
+# document's own timestamp are *not* included.
+SUMMARY_FIELDS: dict[str, tuple[str, ...]] = {
     "start": ("uid", "scan_id"),
     "descriptor": ("uid", "run_start", "name"),
     "event": ("uid", "descriptor", "seq_num"),
     "event_page": ("descriptor",),
-    "stop": ("uid", "run_start", "exit_status"),
+    "stop": ("uid", "run_start", "exit_status", "reason"),
     "resource": ("uid", "run_start", "spec"),
     "datum": ("datum_id", "resource"),
     "datum_page": ("datum_id", "resource"),
@@ -47,21 +47,21 @@ POINTER_FIELDS: dict[str, tuple[str, ...]] = {
 }
 
 
-def document_pointers(name: str, doc: Mapping[str, Any]) -> dict[str, Any]:
-    """Return the ``POINTER_FIELDS`` that ``doc`` has; for event pages, also
+def document_summary(name: str, doc: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the ``SUMMARY_FIELDS`` that ``doc`` has; for event pages, also
     the entry count and the seq_num range covered (``stop`` exclusive).
 
     This runs in the RunEngine thread, where an exception aborts the run, so
     optional fields are copied only if present and empty pages are handled.
     """
-    pointers = {key: doc[key] for key in POINTER_FIELDS.get(name, ()) if key in doc}
+    summary = {key: doc[key] for key in SUMMARY_FIELDS.get(name, ()) if key in doc}
     if name == "event_page":
         # Special handling of the potentially long list of sequence numbers
         seq_nums = doc.get("seq_num", ())
-        pointers["count"] = len(seq_nums)
+        summary["count"] = len(seq_nums)
         if len(seq_nums):
-            pointers["seq_nums"] = {"start": int(min(seq_nums)), "stop": int(max(seq_nums)) + 1}
-    return pointers
+            summary["seq_nums"] = {"start": int(min(seq_nums)), "stop": int(max(seq_nums)) + 1}
+    return summary
 
 
 class OpenRuns:
@@ -82,12 +82,12 @@ class OpenRuns:
         self.uids = " ".join(other for other in self.uids.split() if other != uid)
 
 
-class DocumentPointerLoggingCallback:
-    """RunEngine callback that logs the pointers of every document and keeps
+class DocumentSummaryLoggingCallback:
+    """RunEngine callback that logs a summary of every document and keeps
     ``open_runs`` current.
 
     Each document is logged to ``logger`` at INFO with the document name as the
-    message and ``{"document": name, **pointers}`` as the record's
+    message and ``{"document": name, **summary}`` as the record's
     ``document_fields`` attribute.
     """
 
@@ -100,7 +100,7 @@ class DocumentPointerLoggingCallback:
         # stop, so both lines list their own run.
         if name == "start":
             self._open_runs.add(doc["uid"])
-        fields = {"document": name, **document_pointers(name, doc)}
+        fields = {"document": name, **document_summary(name, doc)}
         self._logger.info("%s", name, extra={"document_fields": fields})
         if name == "stop":
             self._open_runs.remove(doc["run_start"])
@@ -152,7 +152,7 @@ class BlueskyJSONLinesFormatter(logging.Formatter):
 
 
 class BlueskyDocumentJSONLinesFormatter(logging.Formatter):
-    """Format a record of ``DocumentPointerLoggingCallback`` as one line of JSON.
+    """Format a record of ``DocumentSummaryLoggingCallback`` as one line of JSON.
 
     ``run_uids`` is read from ``open_runs`` when the record is formatted, so
     the handler must format in the thread that logs (not behind a queue).
@@ -187,7 +187,7 @@ def configure_bluesky_json_logging(
     Write the log records at level INFO and above of the bluesky, ophyd,
     ophyd_async, and nslsii loggers, and of ``ipython.log`` if ``ipython`` is
     given, to a JSON-lines file for log collectors such as Grafana Alloy. If
-    ``RE`` is given, also write the pointers of every document it emits to a
+    ``RE`` is given, also write a summary of every document it emits to a
     second JSON-lines file.
 
     This is opt-in: ``configure_base`` does not call it. It is independent of
@@ -242,6 +242,6 @@ def configure_bluesky_json_logging(
             document_logger.propagate = False
             document_logger.addHandler(document_handler)
             document_logger.setLevel(logging.INFO)
-            RE.subscribe(DocumentPointerLoggingCallback(document_logger, open_runs))
+            RE.subscribe(DocumentSummaryLoggingCallback(document_logger, open_runs))
             paths.append(documents_path)
     return paths
