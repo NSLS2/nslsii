@@ -199,9 +199,9 @@ class Xspress3AcquireLogic(ADAcquireLogic):
         # callback so one requested exposure produces exactly one HDF frame.
         array_callbacks = await self.driver.array_callbacks.get_value()
         await self.driver.erase_on_start.set(False)
-        if array_callbacks:
-            await self.driver.array_callbacks.set(False)
         try:
+            if array_callbacks:
+                await self.driver.array_callbacks.set(False)
             await self.driver.erase.trigger()
         finally:
             if array_callbacks:

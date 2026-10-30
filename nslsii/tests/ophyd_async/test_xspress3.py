@@ -397,6 +397,41 @@ async def test_unstage_stops_acquisition_and_capture_after_cancellation():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["timeout", "cancel"])
+async def test_callbacks_are_restored_when_disabling_put_fails(failure):
+    detector = make_detector()
+    await connect_and_seed(detector)
+    set_mock_value(detector.driver.array_callbacks, True)
+    await detector.stage()
+    try:
+        await detector.prepare(TriggerInfo())
+        applied = asyncio.Event()
+
+        async def apply_then_fail(value):
+            if not value:
+                set_mock_value(detector.driver.array_callbacks, False)
+                applied.set()
+                if failure == "timeout":
+                    raise TimeoutError("write acknowledgement lost")
+                await asyncio.Future()
+
+        with callback_on_mock_put(detector.driver.array_callbacks, apply_then_fail):
+            status = detector.trigger()
+            await asyncio.wait_for(applied.wait(), timeout=1)
+            if failure == "cancel":
+                status.task.cancel()
+            expected_error = TimeoutError if failure == "timeout" else asyncio.CancelledError
+            with pytest.raises(expected_error):
+                await status
+
+        assert await detector.driver.array_callbacks.get_value() is True
+        assert await detector.driver.acquire.get_value() is False
+        assert await detector.hdf.num_captured.get_value() == 0
+    finally:
+        await detector.unstage()
+
+
+@pytest.mark.asyncio
 async def test_all_data_views_describe_and_emit_advancing_stream_documents():
     detector = make_detector(
         channel_numbers=(1, 2),
