@@ -60,9 +60,11 @@ def _without_time(line):
 
 def test_log_lines_from_all_loggers(json_log_dir):
     ip = IPython.core.interactiveshell.InteractiveShell()
-    assert configure_bluesky_json_logging(ipython=ip) == [_log_file(json_log_dir)]
+    assert configure_bluesky_json_logging(ipython=ip, extra_loggers=["my_beamline"]) == [_log_file(json_log_dir)]
 
-    loggers = [logging.getLogger(name) for name in ("bluesky", "nslsii", "ophyd", "ophyd_async")] + [ip.log]
+    loggers = [
+        logging.getLogger(name) for name in ("bluesky", "nslsii", "ophyd", "ophyd_async", "my_beamline")
+    ] + [ip.log]
     for logger in loggers:
         logger.info("%s log message", logger.name)
 

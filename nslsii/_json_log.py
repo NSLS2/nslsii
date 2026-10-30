@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Iterable, Mapping
 
     from bluesky import RunEngine
     from IPython.core.interactiveshell import InteractiveShell
@@ -181,14 +181,16 @@ def _open_json_log_file(path: Path, rotation: tuple[int, int]) -> RotatingFileHa
 
 
 def configure_bluesky_json_logging(
-    ipython: InteractiveShell | None = None, RE: RunEngine | None = None
+    ipython: InteractiveShell | None = None,
+    RE: RunEngine | None = None,
+    extra_loggers: Iterable[str] = (),
 ) -> list[Path]:
     """
     Write the log records at level INFO and above of the bluesky, ophyd,
-    ophyd_async, and nslsii loggers, and of ``ipython.log`` if ``ipython`` is
-    given, to a JSON-lines file for log collectors such as Grafana Alloy. If
-    ``RE`` is given, also write a summary of every document it emits to a
-    second JSON-lines file.
+    ophyd_async, and nslsii loggers, of any ``extra_loggers``, and of
+    ``ipython.log`` if ``ipython`` is given, to a JSON-lines file for log
+    collectors such as Grafana Alloy. If ``RE`` is given, also write a summary
+    of every document it emits to a second JSON-lines file.
 
     This is opt-in: ``configure_base`` does not call it. It is independent of
     ``configure_bluesky_logging`` and can be used with or without it.
@@ -208,6 +210,10 @@ def configure_bluesky_json_logging(
         IPython InteractiveShell whose logger is also written to the JSON log
     RE: RunEngine, optional
         RunEngine whose documents are logged and determine ``run_uids``
+    extra_loggers: iterable of str, optional
+        Names of more loggers to write to the JSON log, such as those of
+        beamline-specific packages; they are set to INFO like the default
+        loggers. Name the top of each logger tree to avoid duplicate logs.
 
     Returns
     -------
@@ -225,7 +231,7 @@ def configure_bluesky_json_logging(
     if log_handler is not None:
         log_handler.setLevel(logging.INFO)
         log_handler.setFormatter(BlueskyJSONLinesFormatter(open_runs))
-        loggers = [logging.getLogger(name) for name in LOGGER_NAMES]
+        loggers = [logging.getLogger(name) for name in (*LOGGER_NAMES, *extra_loggers)]
         if ipython is not None:
             loggers.append(ipython.log)
         for logger in loggers:
