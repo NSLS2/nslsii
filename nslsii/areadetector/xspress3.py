@@ -3,7 +3,7 @@ import logging
 import re
 import time as ttime
 
-from collections import deque
+from collections import deque, OrderedDict
 from pathlib import Path
 from uuid import uuid4
 
@@ -257,6 +257,40 @@ class Xspress3HDF5Plugin(HDF5Plugin):
         the_data_dir_path = the_datetime.strftime(path_template)
         the_full_data_dir_path = Path(root_path) / Path(the_data_dir_path)
         return str(the_full_data_dir_path)
+
+    def warmup(self):
+        """
+        A convenience method for 'priming' the plugin.
+
+        The plugin has to 'see' one acquisition before it is ready to capture.
+        This sets the array size, etc.
+
+        This method overwrites the default warmup method from the HDF5Plugin.
+        It is the same except that it removes parent.cam.image_mode and
+        parent.cam.acquire_period, since those PVs are disabled on the
+        community ioc.
+        """
+        self.enable.set(1).wait()
+        sigs = OrderedDict(
+            [
+                (self.parent.cam.array_callbacks, 1),
+                (self.parent.cam.trigger_mode, "Internal"),
+                (self.parent.cam.acquire_time, 1),
+                (self.parent.cam.acquire, 1),
+            ]
+        )
+
+        original_vals = {sig: sig.get() for sig in sigs}
+
+        for sig, val in sigs.items():
+            ttime.sleep(0.1)  # abundance of caution
+            sig.set(val).wait()
+
+        ttime.sleep(2)  # wait for acquisition
+
+        for sig, val in reversed(list(original_vals.items())):
+            ttime.sleep(0.1)
+            sig.set(val).wait()
 
     def stage(self):
         logger.debug("staging '%s' of '%s'", self.name, self.parent.name)
