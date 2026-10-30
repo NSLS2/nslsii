@@ -29,7 +29,6 @@ dependencies = [
   "httpx",
   "ipython",
   "ipywidgets",
-  "ldap3",
   "matplotlib",
   "msgpack>=1.0.0",
   "msgpack-numpy",
@@ -46,6 +45,7 @@ dependencies = [
   "redis",
   "redis-json-dict",
   "requests",
+  "tiled",
 ]
 dynamic = ["version"]
 

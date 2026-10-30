@@ -9,7 +9,7 @@ from pathlib import Path
 import appdirs
 from IPython import get_ipython
 
-from .utils import open_redis_client, git_info
+from .utils import get_beamline_env, git_info, md_redis_prefix, open_redis_client
 
 try:
     from ._version import __version__
@@ -47,7 +47,6 @@ def configure_base(
     redis_url=None,
     redis_port=6379,
     redis_ssl=False,
-    redis_prefix="",
     redis_db: int = 0,
     startup_dir=None,
 ):
@@ -114,12 +113,13 @@ def configure_base(
         If IPython should print out 'minimal' tracebacks.
     redis_url : str | None, optional
         The Redis URL. If None, no Redis is used. Default is None.
+        Metadata is read under the key prefix that ``sync-experiment`` writes,
+        derived from the ``BEAMLINE_ACRONYM`` and ``ENDSTATION_ACRONYM``
+        environment variables (e.g. ``smi-md-``, ``smi-opls-md-``).
     redis_port : int, optional
         The Redis port. 6379 by default.
     redis_ssl : bool, optional
         Set to True to use SSL. False by default.
-    redis_prefix : str, optional
-        Set the prefix for the Redis key. Typically the endstation prefix, e.g. "arpes-". "" by default.
     redis_db : int, optional
         Set the database index for the Redis connection. Defaults to 0.
     startup_dir : Path, optional
@@ -155,18 +155,20 @@ def configure_base(
         from redis import Redis
         from redis_json_dict import RedisJSONDict
 
+        beamline, endstation = get_beamline_env()
+        if not beamline:
+            raise ValueError(
+                "Redis-backed metadata requires the 'BEAMLINE_ACRONYM' environment "
+                "variable to be set to derive the metadata key prefix."
+            )
         redis_client = open_redis_client(
             redis_ssl=redis_ssl,
             redis_url=redis_url,
             redis_db=redis_db,
         )
-        if redis_prefix and redis_ssl:
-            raise ValueError(
-                f"Incompatible arguments: '{redis_prefix=}' and '{redis_ssl=}'. Prefixes are no longer supported "
-                f"when using SSL encryption. Specify `redis_db` if you want to use a distinct set of keys with '{redis_ssl=}'."
-            )
-        prefix = redis_prefix if redis_prefix and not redis_ssl else ""
-        md = RedisJSONDict(redis_client=redis_client, prefix=prefix)
+        md = RedisJSONDict(
+            redis_client=redis_client, prefix=md_redis_prefix(beamline, endstation)
+        )
 
     # if RunEngine already defined grab it
     # useful when users make their own custom RunEngine
