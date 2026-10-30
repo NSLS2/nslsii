@@ -299,6 +299,6 @@ class NSLS2PathProvider(PathProvider):
                     "",
                 )
             ),
-            filename=self._filename_provider(),
+            filename=self._filename_provider(datakey_name),
             create_dir_depth=-self._granularity - (1 if self._include_scan_id_dir else 0),
         )
