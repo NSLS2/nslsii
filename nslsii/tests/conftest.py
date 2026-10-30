@@ -1,11 +1,24 @@
 from contextlib import contextmanager  # noqa
+from types import SimpleNamespace
 
 import redis
 
 import pytest
 
-from bluesky.tests.conftest import RE  # noqa
-from ophyd.tests.conftest import hw  # noqa
+from bluesky.run_engine import RunEngine
+
+
+@pytest.fixture
+def RE() -> RunEngine:
+    return RunEngine({})
+
+
+@pytest.fixture
+def hw(tmp_path) -> SimpleNamespace:
+    from ophyd.sim import hw
+
+    return hw(str(tmp_path))
+
 
 def pytest_addoption(parser):
     parser.addoption(

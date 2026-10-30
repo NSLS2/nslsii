@@ -9,6 +9,7 @@ from pathlib import Path
 import appdirs
 from IPython import get_ipython
 
+from ._json_log import configure_bluesky_json_logging
 from .utils import open_redis_client, git_info
 
 try:
