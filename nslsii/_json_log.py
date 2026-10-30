@@ -59,8 +59,8 @@ def document_pointers(name: str, doc: Mapping[str, Any]) -> dict[str, Any]:
         # Special handling of the potentially long list of sequence numbers
         seq_nums = doc.get("seq_num", ())
         pointers["count"] = len(seq_nums)
-        if seq_nums:
-            pointers["seq_nums"] = {"start": min(seq_nums), "stop": max(seq_nums) + 1}
+        if len(seq_nums):
+            pointers["seq_nums"] = {"start": int(min(seq_nums)), "stop": int(max(seq_nums)) + 1}
     return pointers
 
 
