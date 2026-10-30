@@ -17,6 +17,11 @@ from nslsii.ophyd_async import (
 def static_fp():
     return StaticFilenameProvider("test")
 
+@pytest.fixture
+def datakey_prefixing_fp(static_fp):
+
+    return lambda datakey_name: f"{datakey_name}_{static_fp()}"
+
 
 @pytest.fixture
 def dummy_re_md_dict():
@@ -295,3 +300,11 @@ def test_re_metadata_filename_provider(
     with patch("nslsii.ophyd_async.providers.datetime") as mock_dt:
         mock_dt.now.return_value = FIXED_NOW
         assert fp(datakey_name=datakey_name) == expected
+
+
+def test_nsls2_pp_passes_datakey_name_to_fp(dummy_re_md_dict, datakey_prefixing_fp, monkeypatch):
+    monkeypatch.setenv("BEAMLINE_ACRONYM", "tst")
+    datakey_name = "det1"
+    pp = NSLS2PathProvider(dummy_re_md_dict, filename_provider=datakey_prefixing_fp)
+    info = pp(datakey_name)
+    assert info.filename == f"{datakey_name}_test"
