@@ -137,12 +137,12 @@ python = ">=3.11,<3.15"
 nslsii = { path = ".", editable = true }
 
 [tool.pixi.feature.dev.tasks]
-build = "python -m build"
-check = "pre-commit run --all-files"
-coverage = "coverage run -m pytest -s -v && coverage report"
-format = "ruff format --force-exclude ."
-lint = "ruff check --force-exclude ."
-test = "pytest"
+build = { cmd = "python -m build", default-environment = "dev" }
+check = { cmd = "pre-commit run --all-files", default-environment = "dev" }
+coverage = { cmd = "coverage run -m pytest -s -v && coverage report", default-environment = "dev" }
+format = { cmd = "ruff format --force-exclude .", default-environment = "dev" }
+lint = { cmd = "ruff check --force-exclude .", default-environment = "dev" }
+test = { cmd = "pytest", default-environment = "dev" }
 
 [tool.pixi.feature.py311.dependencies]
 python = "3.11.*"
