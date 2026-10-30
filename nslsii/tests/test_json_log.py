@@ -34,20 +34,24 @@ def json_log_dir(tmp_path, monkeypatch):
                 handler.close()
 
 
-def _json_log_file(json_log_dir):
-    return json_log_dir / f"{getpass.getuser()}-{os.getpid()}.jsonl"
+def _log_file(json_log_dir):
+    return json_log_dir / f"{getpass.getuser()}-{os.getpid()}.log.jsonl"
 
 
-def _lines(json_log_dir):
-    return [json.loads(line) for line in _json_log_file(json_log_dir).read_text().splitlines()]
+def _documents_file(json_log_dir):
+    return json_log_dir / f"{getpass.getuser()}-{os.getpid()}.documents.jsonl"
+
+
+def _lines(path):
+    return [json.loads(line) for line in path.read_text().splitlines()]
 
 
 def _log_lines(json_log_dir):
-    return [line for line in _lines(json_log_dir) if "document" not in line]
+    return _lines(_log_file(json_log_dir))
 
 
 def _document_lines(json_log_dir):
-    return [line for line in _lines(json_log_dir) if "document" in line]
+    return _lines(_documents_file(json_log_dir))
 
 
 def _without_time(line):
@@ -56,13 +60,13 @@ def _without_time(line):
 
 def test_log_lines_from_all_loggers(json_log_dir):
     ip = IPython.core.interactiveshell.InteractiveShell()
-    assert configure_bluesky_json_logging(ipython=ip) == _json_log_file(json_log_dir)
+    assert configure_bluesky_json_logging(ipython=ip) == [_log_file(json_log_dir)]
 
     loggers = [logging.getLogger(name) for name in ("bluesky", "nslsii", "ophyd", "ophyd_async")] + [ip.log]
     for logger in loggers:
         logger.info("%s log message", logger.name)
 
-    lines = _lines(json_log_dir)
+    lines = _log_lines(json_log_dir)
     assert [(line["logger"], line["level"], line["message"]) for line in lines] == [
         (logger.name, "INFO", f"{logger.name} log message") for logger in loggers
     ]
@@ -80,6 +84,8 @@ def test_log_lines_from_all_loggers(json_log_dir):
             "run_uids",
         ]
         assert line["process"] == os.getpid()
+    # without RE there are no documents to write
+    assert not _documents_file(json_log_dir).exists()
 
 
 def test_run_uids(RE, hw, json_log_dir):
@@ -123,7 +129,7 @@ def test_run_uids_with_overlapping_runs(RE, json_log_dir):
 
 
 def test_document_lines(RE, hw, json_log_dir):
-    configure_bluesky_json_logging(RE=RE)
+    assert configure_bluesky_json_logging(RE=RE) == [_log_file(json_log_dir), _documents_file(json_log_dir)]
     docs = []
     RE.subscribe(lambda name, doc: docs.append(doc))
     nslsii_stream = io.StringIO()
@@ -144,9 +150,11 @@ def test_document_lines(RE, hw, json_log_dir):
         {"document": "stop", "uid": stop["uid"], "run_start": run, "exit_status": "success", "run_uids": run},
     ]
     # every line, log or document, is timestamped the same way: when it was written
-    for line in _lines(json_log_dir):
+    log_lines = _log_lines(json_log_dir)
+    for line in log_lines + _document_lines(json_log_dir):
         assert datetime.fromisoformat(line["time"]).tzinfo == timezone.utc
-    # document lines reach only the JSON log file
+    # document lines reach only the document file
+    assert not any("document" in line for line in log_lines)
     assert nslsii_stream.getvalue() == ""
 
 
@@ -232,7 +240,8 @@ def test_asset_and_page_documents_keep_only_pointers(RE, json_log_dir):
     assert [_without_time(line) for line in _document_lines(json_log_dir)] == [
         {"document": name, **pointers, "run_uids": ""} for name, _, pointers in documents
     ]
-    assert "pass-123456" not in _json_log_file(json_log_dir).read_text()
+    for path in (_log_file(json_log_dir), _documents_file(json_log_dir)):
+        assert "pass-123456" not in path.read_text()
 
 
 def test_traceback(json_log_dir):
@@ -246,7 +255,7 @@ def test_traceback(json_log_dir):
     logger.info("where am I", stack_info=True)
 
     # one line per record, even with multi-line tracebacks
-    lines = _lines(json_log_dir)
+    lines = _log_lines(json_log_dir)
     assert [line["message"] for line in lines] == ["no traceback", "failed", "where am I"]
     plain, failed, stack = lines
     assert plain["traceback"] == ""
@@ -256,14 +265,26 @@ def test_traceback(json_log_dir):
 
 
 @pytest.mark.parametrize("problem", ["missing", "read-only"])
-def test_skipped_when_dir_unusable(problem, json_log_dir):
+def test_skipped_when_dir_unusable(problem, RE, json_log_dir):
     if problem == "missing":
         json_log_dir.rmdir()
     else:
         json_log_dir.chmod(stat.S_IREAD | stat.S_IEXEC)
 
-    with pytest.warns(UserWarning, match="not writing a JSON log file") as caught:
-        assert configure_bluesky_json_logging() is None
-    # stacklevel=2 attributes the warning to the caller
-    assert caught[0].filename == __file__
-    assert not _json_log_file(json_log_dir).exists()
+    with pytest.warns(UserWarning, match="cannot open bluesky JSON log file") as caught:
+        assert configure_bluesky_json_logging(RE=RE) == []
+    # one warning per file, each attributed to the caller
+    assert [warning.filename for warning in caught] == [__file__, __file__]
+    assert not _log_file(json_log_dir).exists()
+    assert not _documents_file(json_log_dir).exists()
+
+
+def test_files_are_skipped_separately(RE, json_log_dir):
+    # a directory where the document file should be makes only that file unusable
+    _documents_file(json_log_dir).mkdir()
+
+    with pytest.warns(UserWarning, match="cannot open bluesky JSON log file") as caught:
+        assert configure_bluesky_json_logging(RE=RE) == [_log_file(json_log_dir)]
+    assert len(caught) == 1
+    logging.getLogger("bluesky").info("still logged")
+    assert [line["message"] for line in _log_lines(json_log_dir)] == ["still logged"]

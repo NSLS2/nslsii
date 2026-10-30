@@ -1,18 +1,30 @@
-"""Opt-in JSON-lines log file for log collectors such as Grafana Alloy (Loki)."""
+"""JSON-lines log files for log collectors such as Grafana Alloy (Loki)."""
+
+from __future__ import annotations
 
 import getpass
 import json
 import logging
 import os
 import warnings
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+    from bluesky import RunEngine
+    from IPython.core.interactiveshell import InteractiveShell
 
 LOGGER_NAMES = ("bluesky", "ophyd", "ophyd_async", "nslsii")
 DEFAULT_LOG_DIR = "/var/log/bluesky"
-MAX_BYTES = 10 * 1024 * 1024  # per file, before rotation
-BACKUP_COUNT = 5
+# Rotation of each file: (bytes per file, number of backups). Alloy reads only
+# the live file, so its size bounds how long Alloy can be down without losing
+# lines; backups are kept only for reading on disk.
+LOG_FILE_ROTATION = (10 * 1024 * 1024, 5)
+DOCUMENT_FILE_ROTATION = (100 * 1024 * 1024, 1)
 
 # Logger of the Bluesky document lines. Each record carries the line's fields
 # as its ``document_fields`` attribute.
@@ -21,7 +33,7 @@ DOCUMENT_LOGGER_NAME = "nslsii.documents"
 # positions within streams and resources, and a few identifiers. Data,
 # configuration, metadata, file paths, and the document's own timestamp are
 # *not* included.
-POINTER_FIELDS = {
+POINTER_FIELDS: dict[str, tuple[str, ...]] = {
     "start": ("uid", "scan_id"),
     "descriptor": ("uid", "run_start", "name"),
     "event": ("uid", "descriptor", "seq_num"),
@@ -35,7 +47,7 @@ POINTER_FIELDS = {
 }
 
 
-def document_pointers(name, doc):
+def document_pointers(name: str, doc: Mapping[str, Any]) -> dict[str, Any]:
     """Return the ``POINTER_FIELDS`` that ``doc`` has; for event pages, also
     the entry count and the seq_num range covered (``stop`` exclusive).
 
@@ -60,13 +72,13 @@ class OpenRuns:
     RunEngine thread updates it.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.uids = ""
 
-    def add(self, uid):
+    def add(self, uid: str) -> None:
         self.uids = " ".join([*self.uids.split(), uid])
 
-    def remove(self, uid):
+    def remove(self, uid: str) -> None:
         self.uids = " ".join(other for other in self.uids.split() if other != uid)
 
 
@@ -79,11 +91,11 @@ class DocumentPointerLoggingCallback:
     ``document_fields`` attribute.
     """
 
-    def __init__(self, logger, open_runs):
+    def __init__(self, logger: logging.Logger, open_runs: OpenRuns) -> None:
         self._logger = logger
         self._open_runs = open_runs
 
-    def __call__(self, name, doc):
+    def __call__(self, name: str, doc: Mapping[str, Any]) -> None:
         # Add a run before logging its start and remove it after logging its
         # stop, so both lines list their own run.
         if name == "start":
@@ -94,31 +106,28 @@ class DocumentPointerLoggingCallback:
             self._open_runs.remove(doc["run_start"])
 
 
-class BlueskyJSONLinesFormatter(logging.Formatter):
-    """Format a record as one line of JSON.
+def _utc_time(record: logging.LogRecord) -> str:
+    """When ``record`` was created, as ISO 8601 in UTC."""
+    return datetime.fromtimestamp(record.created, tz=UTC).isoformat(timespec="microseconds")
 
-    Every line starts with ``time``, when the record was created, and ends with
-    ``run_uids``, read from ``open_runs`` when the record is formatted; the
-    handler must therefore format in the thread that logs (not behind a
-    queue). Between them, a record with a ``document_fields`` attribute gets
-    those fields, and any other record gets the log fields.
+
+class BlueskyJSONLinesFormatter(logging.Formatter):
+    """Format a log record as one line of JSON.
+
     ``traceback`` holds the exception and stack text that ``logging.Formatter``
     would append to the message; ``json.dumps`` escapes its newlines.
+    ``run_uids`` is read from ``open_runs`` when the record is formatted, so
+    the handler must format in the thread that logs (not behind a queue).
     """
 
-    def __init__(self, open_runs):
+    def __init__(self, open_runs: OpenRuns) -> None:
         super().__init__()
         self._open_runs = open_runs
 
-    def format(self, record):
-        time = datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(timespec="microseconds")
-        if record.name == DOCUMENT_LOGGER_NAME:
-            # "document_fields" is passed as "extra" in logger.info
-            document_fields = getattr(record, "document_fields", {})
-            fields = {"time": time, **document_fields}
-        else:
-            fields = {
-                "time": time,
+    def format(self, record: logging.LogRecord) -> str:
+        return json.dumps(
+            {
+                "time": _utc_time(record),
                 "level": record.levelname,
                 "logger": record.name,
                 "message": record.getMessage(),
@@ -127,11 +136,11 @@ class BlueskyJSONLinesFormatter(logging.Formatter):
                 "lineno": record.lineno,
                 "process": record.process,
                 "thread": record.threadName,
+                "run_uids": self._open_runs.uids,
             }
-        fields["run_uids"] = self._open_runs.uids
-        return json.dumps(fields)
+        )
 
-    def _traceback(self, record):
+    def _traceback(self, record: logging.LogRecord) -> str:
         # Cache the exception text on the record, as logging.Formatter.format
         # does, so other handlers reuse it.
         if record.exc_info and not record.exc_text:
@@ -142,62 +151,56 @@ class BlueskyJSONLinesFormatter(logging.Formatter):
         return "\n".join(parts)
 
 
-def configure_bluesky_json_logging(ipython=None, RE=None):
+class BlueskyDocumentJSONLinesFormatter(logging.Formatter):
+    """Format a record of ``DocumentPointerLoggingCallback`` as one line of JSON.
+
+    ``run_uids`` is read from ``open_runs`` when the record is formatted, so
+    the handler must format in the thread that logs (not behind a queue).
+    """
+
+    def __init__(self, open_runs: OpenRuns) -> None:
+        super().__init__()
+        self._open_runs = open_runs
+
+    def format(self, record: logging.LogRecord) -> str:
+        # "document_fields" is passed as "extra" in logger.info
+        document_fields = getattr(record, "document_fields", {})
+        return json.dumps({"time": _utc_time(record), **document_fields, "run_uids": self._open_runs.uids})
+
+
+def _open_json_log_file(path: Path, rotation: tuple[int, int]) -> RotatingFileHandler | None:
+    """Return a handler that writes ``path`` and rotates it as ``rotation``
+    ``(max_bytes, backup_count)`` says, or None, with a ``UserWarning`` for the
+    caller of ``configure_bluesky_json_logging``, if the file cannot be opened."""
+    max_bytes, backup_count = rotation
+    try:
+        return RotatingFileHandler(path, maxBytes=max_bytes, backupCount=backup_count, encoding="utf-8")
+    except OSError as exc:
+        warnings.warn(f"cannot open bluesky JSON log file ({exc}), not writing it", stacklevel=3)
+        return None
+
+
+def configure_bluesky_json_logging(
+    ipython: InteractiveShell | None = None, RE: RunEngine | None = None
+) -> list[Path]:
     """
     Write the log records at level INFO and above of the bluesky, ophyd,
     ophyd_async, and nslsii loggers, and of ``ipython.log`` if ``ipython`` is
     given, to a JSON-lines file for log collectors such as Grafana Alloy. If
-    ``RE`` is given, also write the pointers of every document it emits.
+    ``RE`` is given, also write the pointers of every document it emits to a
+    second JSON-lines file.
 
     This is opt-in: ``configure_base`` does not call it. It is independent of
     ``configure_bluesky_logging`` and can be used with or without it.
 
-    The file is ``<user>-<pid>.jsonl`` in the directory named by the
-    BLUESKY_JSON_LOG_DIR environment variable (default ``/var/log/bluesky``),
-    rotated at 10 MB with 5 backups (``.jsonl.1`` … ``.jsonl.5``). Records are
-    written by the thread that logs them, so the directory should be on local
-    disk. The directory is never created: if it does not exist or the file
-    cannot be opened, a ``UserWarning`` is issued, nothing is configured, and
-    ``None`` is returned.
-
-    Each line is one JSON object. Every line has ``time``, when the line was
-    written (ISO 8601 in UTC), and ``run_uids``, the uids of the runs ``RE``
-    has open, in the order they were opened and separated by spaces ("" if
-    none is open or ``RE`` is not given).
-
-    A log line also has ``level``, ``logger``, ``message``, ``traceback``,
-    ``module``, ``lineno``, ``process``, and ``thread``. ``traceback`` is the
-    exception and stack text (``logger.exception(...)``, ``exc_info=True``,
-    ``stack_info=True``), or "". Its newlines are escaped like any JSON
-    string, so a line with a traceback is still one line.
-
-    A document line, one per document ``RE`` emits, also has ``document``,
-    the document name, and the document's pointer fields. Data,
-    configuration, metadata, file paths, and the document's own timestamp are
-    never included:
-
-    - ``start``: ``uid``, ``scan_id``
-    - ``descriptor``: ``uid``, ``run_start``, ``name``
-    - ``event``: ``uid``, ``descriptor``, ``seq_num``
-    - ``event_page``: ``descriptor``, ``count``, ``seq_nums``
-    - ``stop``: ``uid``, ``run_start``, ``exit_status``
-    - ``resource``: ``uid``, ``run_start``, ``spec``
-    - ``datum``: ``datum_id``, ``resource``
-    - ``datum_page``: ``datum_id`` (a list), ``resource``
-    - ``stream_resource``: ``uid``, ``run_start``, ``data_key``, ``mimetype``
-    - ``stream_datum``: ``uid``, ``descriptor``, ``stream_resource``,
-      ``seq_nums``, ``indices``
-
-    ``seq_nums`` and ``indices`` are ``{"start": ..., "stop": ...}`` ranges
-    with ``stop`` exclusive, and ``count`` is the number of events in a page.
-    Fields a document lacks are omitted. The ``run_uids`` of a start or stop
-    line includes its own run. Document lines come from the
-    ``nslsii.documents`` logger, which does not propagate, so they reach only
-    this file.
-
-    The level of each logger is set to INFO; the ``propagate`` field of the
-    other loggers is not changed. Call this function once per process: each
-    call adds another handler and RunEngine subscription.
+    The files are ``<user>-<pid>.log.jsonl`` and, if ``RE`` is given,
+    ``<user>-<pid>.documents.jsonl`` in the directory named by the
+    BLUESKY_JSON_LOG_DIR environment variable (default ``/var/log/bluesky``).
+    The log file is rotated at 10 MB with 5 backups (``.jsonl.1`` …
+    ``.jsonl.5``). The document file is rotated at 100 MB with 1 backup
+    (``.jsonl.1``), so a burst of documents never rotates log lines away.
+    Log collectors read only the live files, so their size bounds how long a 
+    collector can be down without losing lines.
 
     Parameters
     ----------
@@ -208,32 +211,37 @@ def configure_bluesky_json_logging(ipython=None, RE=None):
 
     Returns
     -------
-    path: Path or None
-        JSON log file path, or None if the file could not be opened
-
+    paths: list of Path
+        The files being written: the log file and, if ``RE`` is given, the
+        document file, each only if it could be opened
     """
     log_dir = Path(os.environ.get("BLUESKY_JSON_LOG_DIR", DEFAULT_LOG_DIR))
-    path = log_dir / f"{getpass.getuser()}-{os.getpid()}.jsonl"
-    try:
-        handler = RotatingFileHandler(path, maxBytes=MAX_BYTES, backupCount=BACKUP_COUNT, encoding="utf-8")
-    except OSError as exc:
-        warnings.warn(f"cannot open bluesky JSON log file '{path}' ({exc}), not writing a JSON log file", stacklevel=2)
-        return None
+    stem = f"{getpass.getuser()}-{os.getpid()}"
     open_runs = OpenRuns()
-    handler.setLevel(logging.INFO)
-    handler.setFormatter(BlueskyJSONLinesFormatter(open_runs))
+    paths: list[Path] = []
 
-    loggers = [logging.getLogger(name) for name in LOGGER_NAMES]
-    if ipython is not None:
-        loggers.append(ipython.log)
-    for logger in loggers:
-        logger.addHandler(handler)
-        logger.setLevel(logging.INFO)
+    log_path = log_dir / f"{stem}.log.jsonl"
+    log_handler = _open_json_log_file(log_path, LOG_FILE_ROTATION)
+    if log_handler is not None:
+        log_handler.setLevel(logging.INFO)
+        log_handler.setFormatter(BlueskyJSONLinesFormatter(open_runs))
+        loggers = [logging.getLogger(name) for name in LOGGER_NAMES]
+        if ipython is not None:
+            loggers.append(ipython.log)
+        for logger in loggers:
+            logger.addHandler(log_handler)
+            logger.setLevel(logging.INFO)
+        paths.append(log_path)
 
     if RE is not None:
-        document_logger = logging.getLogger(DOCUMENT_LOGGER_NAME)
-        document_logger.propagate = False
-        document_logger.addHandler(handler)
-        document_logger.setLevel(logging.INFO)
-        RE.subscribe(DocumentPointerLoggingCallback(document_logger, open_runs))
-    return path
+        documents_path = log_dir / f"{stem}.documents.jsonl"
+        document_handler = _open_json_log_file(documents_path, DOCUMENT_FILE_ROTATION)
+        if document_handler is not None:
+            document_handler.setFormatter(BlueskyDocumentJSONLinesFormatter(open_runs))
+            document_logger = logging.getLogger(DOCUMENT_LOGGER_NAME)
+            document_logger.propagate = False
+            document_logger.addHandler(document_handler)
+            document_logger.setLevel(logging.INFO)
+            RE.subscribe(DocumentPointerLoggingCallback(document_logger, open_runs))
+            paths.append(documents_path)
+    return paths
