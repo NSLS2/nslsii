@@ -37,7 +37,7 @@ from ophyd_async.epics.adcore import (
     NDArrayDescription,
     NDFileHDF5IO,
     NDPluginBaseIO,
-    trigger_info_from_num_images,
+    trigger_info_from_driver,
 )
 from ophyd_async.epics.core import (
     EpicsDevice,
@@ -185,7 +185,7 @@ class Xspress3TriggerLogic(DetectorTriggerLogic):
 
     async def default_trigger_info(self) -> TriggerInfo:
         """Return internal trigger information preserving ``NumImages``."""
-        return await trigger_info_from_num_images(self.driver)
+        return await trigger_info_from_driver(self.driver.num_images)
 
 
 class Xspress3AcquireLogic(ADAcquireLogic):
