@@ -16,7 +16,7 @@ What's Changed
 * Make ``dev`` the default environment for the pixi dev tasks by `@jwlodek <https://github.com/jwlodek>`_ in https://github.com/NSLS2/nslsii/pull/314
 * Ophyd-async device for the Xspress3 detector (community IOC): ``Xspress3Detector``, ``Xspress3HDFWriterFactory``, and related classes in ``nslsii.ophyd_async.devices``. Also fixes ``import nslsii.ophyd_async.devices``, which failed in v0.11.10 with ``ModuleNotFoundError: No module named 'rbd9103'``, by `@thopkins32 <https://github.com/thopkins32>`_ in https://github.com/NSLS2/nslsii/pull/269
 * Add profile helpers ``nslsii.utils.print_proposal_info`` and ``nslsii.utils.print_version_info``; move ``RBD9103`` to ``ophyd_async.epics.core`` imports by `@jwlodek <https://github.com/jwlodek>`_ in https://github.com/NSLS2/nslsii/pull/316
-* Add opt-in JSON-lines logging for Bluesky sessions: ``nslsii.configure_bluesky_json_logging()`` writes log records and Bluesky document summaries to ``$BLUESKY_JSON_LOG_DIR`` (default ``/var/log/bluesky``) for log collectors such as Grafana Alloy/Loki by `@thopkins32 <https://github.com/thopkins32>`_ in https://github.com/NSLS2/nslsii/pull/315
+* Add opt-in JSON-lines logging for Bluesky sessions: ``nslsii.configure_bluesky_json_logging(RE=RE)`` writes log records and Bluesky document summaries to ``$BLUESKY_JSON_LOG_DIR`` (default ``/var/log/bluesky``) for log collectors such as Grafana Alloy/Loki by `@thopkins32 <https://github.com/thopkins32>`_ in https://github.com/NSLS2/nslsii/pull/315
 
 **Breaking Changes**
 
