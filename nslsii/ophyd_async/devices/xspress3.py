@@ -23,6 +23,7 @@ from ophyd_async.core import (
     StreamResourceDataProvider,
     StreamResourceInfo,
     StrictEnum,
+    SubsetEnum,
     SupersetEnum,
     TriggerableCommand,
     TriggerInfo,
@@ -84,7 +85,7 @@ class Xspress3LevelTriggerMode(StrictEnum):
     LVDS_BOTH = "LVDS Both"
 
 
-class Xspress3RoiTimeSeriesControl(StrictEnum):
+class Xspress3RoiTimeSeriesControl(SupersetEnum):
     """Commands exposed by the ROIStat time-series control record."""
 
     ERASE_AND_START = "Erase/Start"
@@ -228,7 +229,8 @@ class Xspress3DriverIO(ADBaseIO):
     erase: A[TriggerableCommand, PvSuffix("ERASE")]
     reset: A[TriggerableCommand, PvSuffix("RESET")]
     erase_on_start: A[SignalRW[bool], PvSuffix("EraseOnStart")]
-    soft_trigger: A[SignalRW[bool], PvSuffix.rbv("SoftTrigger")]
+    # Older XS3 IOCs do not expose this feature, and it is not used.
+    # soft_trigger: A[SignalRW[bool], PvSuffix.rbv("SoftTrigger")]
     array_callbacks: A[SignalRW[bool], PvSuffix.rbv("ArrayCallbacks")]
     frame_count: A[SignalR[int], PvSuffix("FRAME_COUNT_RBV")]
     num_channels: A[SignalRW[int], PvSuffix.rbv("NUM_CHANNELS")]
