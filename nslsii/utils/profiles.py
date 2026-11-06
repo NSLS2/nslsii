@@ -17,6 +17,7 @@ def print_proposal_info(md: MutableMapping[str, Any]):
     """
     proposal_md = md.get("proposal", {})
     if proposal_md:
+        print(f"\n{BOLD}Active Proposal Information{RESET}\n")
         print(f"{BOLD}  - Title: {GREEN}{ITALIC}{proposal_md['title']}{RESET}")
         print(f"{BOLD}  - Type:  {ITALIC}{proposal_md['type']}{RESET}")
         print(f"{BOLD}  - PI:    {ITALIC}{proposal_md['pi_name']}{RESET}\n")
