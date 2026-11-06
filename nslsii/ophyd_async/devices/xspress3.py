@@ -171,7 +171,7 @@ class Xspress3TriggerLogic(DetectorTriggerLogic):
         livetime : float
             Exposure time in seconds, or zero to preserve the current value.
         """
-        await self._prepare(Xspress3TriggerMode.TTL_INTERNAL, num, livetime)
+        await self._prepare(Xspress3TriggerMode.TTL_VETO_ONLY, num, livetime)
 
     async def prepare_level(self, num: int):
         """Configure finite, externally level-triggered frames.
