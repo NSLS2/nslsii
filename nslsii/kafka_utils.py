@@ -62,7 +62,7 @@ _subscribe_kafka_publisher.
 """
 _SubscribeKafkaPublisherDetails = namedtuple(
     "SubscribeKafkaPublisherDetails",
-    {"beamline_topic", "bootstrap_servers", "producer_config", "re_subscribe_token"},
+    ("beamline_topic", "bootstrap_servers", "producer_config", "re_subscribe_token"),
 )
 
 
@@ -176,13 +176,13 @@ _subscribe_kafka_queue_thread_publisher.
 """
 _SubscribeKafkaQueueThreadPublisherDetails = namedtuple(
     "SubscribeKafkaQueueThreadPublisherDetails",
-    {
+    (
         "beamline_topic",
         "bootstrap_servers",
         "producer_config",
         "publisher_queue_thread_details",
         "re_subscribe_token",
-    },
+    ),
 )
 
 
