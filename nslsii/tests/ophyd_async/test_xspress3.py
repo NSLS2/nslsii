@@ -598,10 +598,6 @@ async def test_stream_metadata_ignores_disabled_adbase_readbacks(ctrl_dtc, expec
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(
-    reason="Requires the upstream one-dimensional stream dtype fix",
-    strict=True,
-)
 async def test_one_dimensional_and_batched_scalar_datakey_types():
     detector = make_detector(
         mca_roi_numbers=(1,),
