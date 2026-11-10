@@ -8,7 +8,7 @@ import logging
 import os
 import warnings
 from datetime import UTC, datetime
-from logging.handlers import RotatingFileHandler
+from logging.handlers import WatchedFileHandler
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -20,11 +20,6 @@ if TYPE_CHECKING:
 
 LOGGER_NAMES = ("bluesky", "ophyd", "ophyd_async", "nslsii")
 DEFAULT_LOG_DIR = "/var/log/bluesky"
-# Rotation of each file: (bytes per file, number of backups). Alloy reads only
-# the live file, so its size bounds how long Alloy can be down without losing
-# lines; backups are kept only for reading on disk.
-LOG_FILE_ROTATION = (10 * 1024 * 1024, 5)
-DOCUMENT_FILE_ROTATION = (100 * 1024 * 1024, 1)
 
 # Logger of the Bluesky document lines. Each record carries the line's fields
 # as its ``document_fields`` attribute.
@@ -168,13 +163,24 @@ class BlueskyDocumentJSONLinesFormatter(logging.Formatter):
         return json.dumps({"time": _utc_time(record), **document_fields, "run_uids": self._open_runs.uids})
 
 
-def _open_json_log_file(path: Path, rotation: tuple[int, int]) -> RotatingFileHandler | None:
-    """Return a handler that writes ``path`` and rotates it as ``rotation``
-    ``(max_bytes, backup_count)`` says, or None, with a ``UserWarning`` for the
-    caller of ``configure_bluesky_json_logging``, if the file cannot be opened."""
-    max_bytes, backup_count = rotation
+class _ReopeningFileHandler(WatchedFileHandler):
+    """``WatchedFileHandler`` that reports a failure to reopen its file with
+    ``handleError``, as it reports a failure to write it, instead of raising it
+    to the code that logged: a RunEngine callback that raises aborts the run."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            super().emit(record)
+        except Exception:
+            self.handleError(record)
+
+
+def _open_json_log_file(path: Path) -> _ReopeningFileHandler | None:
+    """Return a handler that appends to ``path`` and reopens it whenever it is
+    renamed or deleted, or None, with a ``UserWarning`` for the caller of
+    ``configure_bluesky_json_logging``, if the file cannot be opened."""
     try:
-        return RotatingFileHandler(path, maxBytes=max_bytes, backupCount=backup_count, encoding="utf-8")
+        return _ReopeningFileHandler(path, encoding="utf-8")
     except OSError as exc:
         warnings.warn(f"cannot open bluesky JSON log file ({exc}), not writing it", stacklevel=3)
         return None
@@ -198,11 +204,9 @@ def configure_bluesky_json_logging(
     The files are ``<user>-<pid>.log.jsonl`` and, if ``RE`` is given,
     ``<user>-<pid>.documents.jsonl`` in the directory named by the
     BLUESKY_JSON_LOG_DIR environment variable (default ``/var/log/bluesky``).
-    The log file is rotated at 10 MB with 5 backups (``.jsonl.1`` …
-    ``.jsonl.5``). The document file is rotated at 100 MB with 1 backup
-    (``.jsonl.1``), so a burst of documents never rotates log lines away.
-    Log collectors read only the live files, so their size bounds how long a 
-    collector can be down without losing lines.
+    The files are never rotated or deleted here; that must be handled
+    separately, outside Python. Each file is reopened at its path whenever it
+    has been renamed or deleted.
 
     Parameters
     ----------
@@ -227,7 +231,7 @@ def configure_bluesky_json_logging(
     paths: list[Path] = []
 
     log_path = log_dir / f"{stem}.log.jsonl"
-    log_handler = _open_json_log_file(log_path, LOG_FILE_ROTATION)
+    log_handler = _open_json_log_file(log_path)
     if log_handler is not None:
         log_handler.setLevel(logging.INFO)
         log_handler.setFormatter(BlueskyJSONLinesFormatter(open_runs))
@@ -241,7 +245,7 @@ def configure_bluesky_json_logging(
 
     if RE is not None:
         documents_path = log_dir / f"{stem}.documents.jsonl"
-        document_handler = _open_json_log_file(documents_path, DOCUMENT_FILE_ROTATION)
+        document_handler = _open_json_log_file(documents_path)
         if document_handler is not None:
             document_handler.setFormatter(BlueskyDocumentJSONLinesFormatter(open_runs))
             document_logger = logging.getLogger(DOCUMENT_LOGGER_NAME)
