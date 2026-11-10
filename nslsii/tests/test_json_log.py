@@ -58,6 +58,18 @@ def _without_time(line):
     return {key: value for key, value in line.items() if key != "time"}
 
 
+def _nslsii_messages(path):
+    return [line["message"] for line in _lines(path) if line["logger"] == "nslsii"]
+
+
+def _document_names(path):
+    return [line["document"] for line in _lines(path)]
+
+
+def _rotated(path):
+    return path.with_name(path.name + ".1")
+
+
 def test_log_lines_from_all_loggers(json_log_dir):
     ip = IPython.core.interactiveshell.InteractiveShell()
     assert configure_bluesky_json_logging(ipython=ip, extra_loggers=["my_beamline"]) == [_log_file(json_log_dir)]
@@ -311,3 +323,46 @@ def test_files_are_skipped_separately(RE, json_log_dir):
     assert len(caught) == 1
     logging.getLogger("bluesky").info("still logged")
     assert [line["message"] for line in _log_lines(json_log_dir)] == ["still logged"]
+
+
+@pytest.mark.parametrize("removal", ["renamed", "deleted"])
+def test_files_reopened_after_rename_or_delete(removal, RE, hw, json_log_dir):
+    configure_bluesky_json_logging(RE=RE)
+    logging.getLogger("nslsii").info("before")
+    RE(count([hw.det], num=1))
+
+    for path in (_log_file(json_log_dir), _documents_file(json_log_dir)):
+        if removal == "renamed":
+            path.rename(_rotated(path))
+        else:
+            path.unlink()
+
+    logging.getLogger("nslsii").info("after")
+    RE(count([hw.det], num=1))
+
+    assert _nslsii_messages(_log_file(json_log_dir)) == ["after"]
+    assert _document_names(_documents_file(json_log_dir)) == ["start", "descriptor", "event", "stop"]
+    if removal == "renamed":
+        assert _nslsii_messages(_rotated(_log_file(json_log_dir))) == ["before"]
+        assert _document_names(_rotated(_documents_file(json_log_dir))) == ["start", "descriptor", "event", "stop"]
+
+
+def test_reopen_failure_does_not_interrupt_runs(RE, hw, json_log_dir):
+    configure_bluesky_json_logging(RE=RE)
+    stops = []
+    RE.subscribe(lambda name, doc: stops.append(doc["exit_status"]), "stop")
+
+    for path in (_log_file(json_log_dir), _documents_file(json_log_dir)):
+        path.rename(_rotated(path))
+    json_log_dir.chmod(stat.S_IREAD | stat.S_IEXEC)
+    try:
+        logging.getLogger("nslsii").info("lost")
+        RE(count([hw.det], num=1))
+    finally:
+        json_log_dir.chmod(stat.S_IRWXU)
+    assert stops == ["success"]
+
+    logging.getLogger("nslsii").info("recovered")
+    RE(count([hw.det], num=1))
+    assert _nslsii_messages(_log_file(json_log_dir)) == ["recovered"]
+    assert _document_names(_documents_file(json_log_dir)) == ["start", "descriptor", "event", "stop"]
