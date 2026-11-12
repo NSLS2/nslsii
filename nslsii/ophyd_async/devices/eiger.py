@@ -53,7 +53,7 @@ from ophyd_async.epics.adcore import (
     NDFileHDF5IO,
     NDFileIO,
     NDPluginBaseIO,
-    trigger_info_from_num_images,
+    trigger_info_from_driver,
 )
 from ophyd_async.epics.core import PvSuffix, stop_busy_record, wait_for_good_state
 
@@ -406,7 +406,7 @@ class EigerTriggerLogic(DetectorTriggerLogic):
         await self._prepare_series(EigerTriggerMode.EXTERNAL_ENABLE, manual=False, num=num)
 
     async def default_trigger_info(self):
-        return await trigger_info_from_num_images(self.driver)
+        return await trigger_info_from_driver(self.driver.num_images)
 
 
 class EigerAcquireLogic(DetectorAcquireLogic):
