@@ -157,7 +157,8 @@ class NSLS2PathProvider(PathProvider):
         file-writing detector IOC runs on a windows host.
         If not provided, the base write directory will be the same as the base data directory.
     separator : str, optional
-        Separator to use in YMD portion of the path. Defaults to default path separator given write directory semantics.
+        Separator to use in YMD portion of the path. Defaults to each path's own separator: backslash for a
+        Windows write directory, forward slash for the read directory.
     granularity : YMDGranularity | str, default YMDGranularity.day
         Granularity of the YMD portion of the path. If set to YMDGranularity.day, the path will include year, month,
         and day directories. If set to YMDGranularity.month, the path will include year and month directories.
@@ -200,7 +201,9 @@ class NSLS2PathProvider(PathProvider):
 
         self._base_write_dir = self._base_data_dir if not base_write_dir else base_write_dir
 
-        self._ymd_separator = separator or ("\\" if isinstance(self._base_write_dir, PureWindowsPath) else "/")
+        # None means each path uses its own separator: "\\" for a Windows write
+        # path, "/" for the POSIX read path.
+        self._ymd_separator = separator
         self._include_scan_id_dir = include_scan_id_dir
         if isinstance(scan_id_padding, bool) or not isinstance(scan_id_padding, int) or scan_id_padding < 0:
             raise ValueError("scan_id_padding must be a non-negative integer!")
@@ -238,14 +241,15 @@ class NSLS2PathProvider(PathProvider):
         """
 
         path_semantics = type(base_path)
+        separator = self._ymd_separator or ("\\" if isinstance(base_path, PureWindowsPath) else "/")
 
         # Given requested granularity, construct the current date template string to be used in the path.
         if self._granularity >= YMDGranularity.day:
-            current_date_template = f"%Y{self._ymd_separator}%m{self._ymd_separator}%d"
+            current_date_template = f"%Y{separator}%m{separator}%d"
         elif self._granularity == YMDGranularity.month:
-            current_date_template = f"%Y{self._ymd_separator}%m"
+            current_date_template = f"%Y{separator}%m"
         elif self._granularity == YMDGranularity.year:
-            current_date_template = f"%Y{self._ymd_separator}"
+            current_date_template = f"%Y{separator}"
         elif self._granularity == YMDGranularity.none:
             current_date_template = ""
 
@@ -299,6 +303,6 @@ class NSLS2PathProvider(PathProvider):
                     "",
                 )
             ),
-            filename=self._filename_provider(),
+            filename=self._filename_provider(datakey_name),
             create_dir_depth=-self._granularity - (1 if self._include_scan_id_dir else 0),
         )
