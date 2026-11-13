@@ -1,5 +1,6 @@
 """Tests for redis-related parameter changes in utils, __init__, and sync_experiment."""
 
+import logging
 from unittest.mock import MagicMock, patch, mock_open
 
 import pytest
@@ -155,3 +156,139 @@ def test_switch_redis_proposal_passes_redis_db(switch_mocks):
 
     call_kwargs = switch_mocks["open_redis_client"].call_args[1]
     assert call_kwargs["redis_db"] == 7
+
+
+def test_switch_redis_proposal_logs_instead_of_printing(switch_mocks, caplog, capsys):
+    """Status messages should go through the module logger, not stdout."""
+    with caplog.at_level(logging.DEBUG, logger=_sync_mod.logger.name):
+        switch_redis_proposal(123456, beamline="SMI", username="testuser")
+
+    assert capsys.readouterr().out == ""
+    assert "Redis connection info" in caplog.text
+    assert "Started experiment pass-123456 by testuser." in caplog.text
+
+
+def test_switch_redis_proposal_rejects_verbose_kwarg(switch_mocks):
+    """The verbose kwarg was removed in favor of logging."""
+    with pytest.raises(TypeError):
+        switch_redis_proposal(123456, beamline="SMI", username="testuser", verbose=True)
+
+
+# ---------------------------------------------------------------------------
+# sync_experiment tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def sync_mocks():
+    """Patch authentication, prompts, and switch_redis_proposal for sync_experiment."""
+    with (
+        patch.object(_sync_mod, "authenticate") as mock_auth,
+        patch.object(_sync_mod, "switch_redis_proposal", return_value={"md": 1}) as mock_switch,
+        patch("builtins.input", return_value="prompted_user") as mock_input,
+        patch.object(_sync_mod, "getpass", return_value="prompted_pw") as mock_getpass,
+    ):
+        yield {
+            "authenticate": mock_auth,
+            "switch_redis_proposal": mock_switch,
+            "input": mock_input,
+            "getpass": mock_getpass,
+        }
+
+
+def test_sync_experiment_uses_provided_credentials(sync_mocks):
+    """Provided username/password should be used without prompting."""
+    md = _sync_mod.sync_experiment(
+        123456, beamline="SMI", username="testuser", password="secret"
+    )
+
+    sync_mocks["input"].assert_not_called()
+    sync_mocks["getpass"].assert_not_called()
+    sync_mocks["authenticate"].assert_called_once_with("testuser", "secret")
+    assert md == {"md": 1}
+
+
+def test_sync_experiment_prompts_for_missing_credentials(sync_mocks):
+    """Missing username/password should fall back to interactive prompts."""
+    _sync_mod.sync_experiment(123456, beamline="SMI")
+
+    sync_mocks["input"].assert_called_once()
+    sync_mocks["getpass"].assert_called_once()
+    sync_mocks["authenticate"].assert_called_once_with("prompted_user", "prompted_pw")
+    assert sync_mocks["switch_redis_proposal"].call_args[1]["username"] == "prompted_user"
+
+
+def test_sync_experiment_forwards_redis_args(sync_mocks):
+    """Redis-related args should be forwarded, and verbose should not be."""
+    _sync_mod.sync_experiment(
+        123456,
+        beamline="SMI",
+        username="testuser",
+        password="secret",
+        endstation="opls",
+        redis_db=4,
+        redis_ssl=False,
+    )
+
+    args, kwargs = sync_mocks["switch_redis_proposal"].call_args
+    assert args == (123456,)
+    assert kwargs == {
+        "beamline": "SMI",
+        "username": "testuser",
+        "endstation": "opls",
+        "redis_db": 4,
+        "redis_ssl": False,
+    }
+
+
+@pytest.mark.parametrize("verbose_flag, expected_level", [("--verbose", logging.DEBUG), ("--no-verbose", logging.INFO)])
+def test_main_sets_log_level_and_prompts(monkeypatch, verbose_flag, expected_level):
+    """main() should set the logger level from --verbose and leave credentials to prompts."""
+    monkeypatch.setattr(
+        sys, "argv", ["sync-experiment", "-b", "SMI", "-p", "123456", verbose_flag]
+    )
+    original_level = _sync_mod.logger.level
+    try:
+        with patch.object(_sync_mod, "sync_experiment") as mock_sync:
+            _sync_mod.main()
+        assert _sync_mod.logger.level == expected_level
+    finally:
+        _sync_mod.logger.setLevel(original_level)
+
+    kwargs = mock_sync.call_args[1]
+    assert kwargs["username"] is None
+    assert kwargs["password"] is None
+    assert kwargs["proposal_number"] == 123456
+    assert kwargs["beamline"] == "SMI"
+
+
+# ---------------------------------------------------------------------------
+# authenticate tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def auth_mocks():
+    with (
+        patch.object(_sync_mod, "open", mock_open(read_data="common:\n  server: ldap.example\n"), create=True),
+        patch.object(_sync_mod, "Server") as mock_server,
+        patch.object(_sync_mod, "Connection") as mock_conn,
+        patch.object(_sync_mod, "getpass") as mock_getpass,
+    ):
+        yield {"Server": mock_server, "Connection": mock_conn, "getpass": mock_getpass}
+
+
+def test_authenticate_uses_given_password(auth_mocks):
+    """authenticate() should use the supplied password and never prompt."""
+    _sync_mod.authenticate("testuser", "secret")
+
+    auth_mocks["getpass"].assert_not_called()
+    kwargs = auth_mocks["Connection"].call_args[1]
+    assert kwargs["user"] == "BNL\\testuser"
+    assert kwargs["password"] == "secret"
+
+
+def test_authenticate_invalid_credentials(auth_mocks):
+    auth_mocks["Connection"].side_effect = _sync_mod.LDAPInvalidCredentialsResult
+    with pytest.raises(RuntimeError, match="Invalid credentials for user 'testuser'"):
+        _sync_mod.authenticate("testuser", "bad")
