@@ -53,6 +53,7 @@ dev = [
   "area_detector_handlers",
   "bluesky-tiled-plugins>=2.0.11,<3",
   "attrs>=17.4.0",
+  "bluesky-tiled-plugins",
   "build",
   "greenlet>=3.5.6,<4",
   "hdf5plugin>=7.1.0,<8",
