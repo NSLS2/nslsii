@@ -2,6 +2,24 @@
 Release History
 ***************
 
+v0.12.1 (2026-11-13)
+====================
+What's Changed
+..............
+* Add an "Active Proposal Information" heading to ``nslsii.utils.print_proposal_info`` output by `@jwlodek <https://github.com/jwlodek>`_ in https://github.com/NSLS2/nslsii/pull/320
+* Fix ``NSLS2PathProvider`` with a Windows ``base_write_dir`` and no ``separator``: the date directories of the read path (``directory_uri``) now use ``/`` instead of ``\``, and only the write path uses ``\`` by `@sligara7 <https://github.com/sligara7>`_ in https://github.com/NSLS2/nslsii/pull/321
+* Bluesky JSON-lines logs (``configure_bluesky_json_logging``) are no longer rotated by Python. Each file is reopened at its path when it is renamed or deleted, so external tools such as ``logrotate`` can rotate it by `@thopkins32 <https://github.com/thopkins32>`_ in https://github.com/NSLS2/nslsii/pull/323
+* Require ``ophyd-async[ca]>=0.21.4``, which fixes the data key ``dtype`` and ``shape`` of one-dimensional and batched scalar Xspress3 streams by `@thopkins32 <https://github.com/thopkins32>`_ in https://github.com/NSLS2/nslsii/pull/324
+* Xspress3 ophyd-async device fixes: externally edge-triggered acquisition uses the ``TTL Veto Only`` trigger mode instead of ``TTL + Internal``; connects to IOCs whose ROI time-series control record has fewer choices; removes the unused ``driver.soft_trigger`` signal, which older IOCs do not have by `@jwlodek <https://github.com/jwlodek>`_ in https://github.com/NSLS2/nslsii/pull/317
+
+**Upgrade Notes**
+
+* If you use ``configure_bluesky_json_logging``, rotate ``$BLUESKY_JSON_LOG_DIR/*.jsonl`` outside Python (for example with ``logrotate``), or the files grow without bound. Rotating by renaming or deleting the file is supported; the next record is written to a new file at the original path (https://github.com/NSLS2/nslsii/pull/323)
+* ``Xspress3DriverIO.soft_trigger`` is removed (https://github.com/NSLS2/nslsii/pull/317)
+
+**Full Changelog**: https://github.com/NSLS2/nslsii/compare/v0.12.0...v0.12.1
+
+
 v0.12.0 (2026-11-05)
 ====================
 What's Changed
