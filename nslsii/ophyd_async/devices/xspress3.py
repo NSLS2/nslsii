@@ -23,7 +23,6 @@ from ophyd_async.core import (
     StreamResourceDataProvider,
     StreamResourceInfo,
     StrictEnum,
-    SubsetEnum,
     SupersetEnum,
     TriggerableCommand,
     TriggerInfo,
