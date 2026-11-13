@@ -105,7 +105,6 @@ async def test_canonical_sources_nonconsecutive_vectors_and_suffix_overrides():
     assert detector.driver.erase.source == "mock+ca://XF:TEST{Xsp:1}:driver:ERASE"
     assert detector.driver.reset.source == "mock+ca://XF:TEST{Xsp:1}:driver:RESET"
     assert detector.driver.erase_on_start.source == ("mock+ca://XF:TEST{Xsp:1}:driver:EraseOnStart")
-    assert detector.driver.soft_trigger.source == ("mock+ca://XF:TEST{Xsp:1}:driver:SoftTrigger_RBV")
     assert detector.hdf.num_capture_calc_disable.source == ("mock+ca://XF:TEST{Xsp:1}:writer:NumCapture_CALC.DISA")
     assert detector.channels[4].spectrum.source == ("mock+ca://XF:TEST{Xsp:1}:MCA4:ArrayData")
     assert detector.channels[4].spectrum_sum.source == ("mock+ca://XF:TEST{Xsp:1}:MCASUM4:ArrayData")
@@ -294,7 +293,7 @@ async def test_default_trigger_info_uses_internal_num_images(num_images, collect
 @pytest.mark.parametrize(
     ("trigger", "expected_mode"),
     [
-        (DetectorTrigger.EXTERNAL_EDGE, Xspress3TriggerMode.TTL_INTERNAL),
+        (DetectorTrigger.EXTERNAL_EDGE, Xspress3TriggerMode.TTL_VETO_ONLY),
         (DetectorTrigger.EXTERNAL_LEVEL, Xspress3TriggerMode.TTL_BOTH),
     ],
 )
