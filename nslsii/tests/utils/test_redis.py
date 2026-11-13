@@ -225,7 +225,6 @@ def test_sync_experiment_forwards_redis_args(sync_mocks):
         beamline="SMI",
         username="testuser",
         password="secret",
-        verbose=True,
         endstation="opls",
         redis_db=4,
         redis_ssl=False,

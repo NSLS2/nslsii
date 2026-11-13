@@ -379,6 +379,7 @@ def main():
     parser.add_argument("-v", "--verbose", action=argparse.BooleanOptionalAction)
     args = parser.parse_args()
 
+    logging.basicConfig()
     if args.verbose:
         logger.setLevel(logging.DEBUG)
     else:
@@ -389,7 +390,6 @@ def main():
         beamline=args.beamline,
         username=None,
         password=None,
-        verbose=args.verbose,
         endstation=args.endstation,
         redis_db=args.redis_db,
         redis_ssl=args.redis_ssl,
