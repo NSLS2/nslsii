@@ -2,8 +2,47 @@
 Release History
 ***************
 
-v0.11.10 (2026-08-24)
+v0.12.0 (2026-11-05)
 ====================
+What's Changed
+..............
+* Optionally store startup-code git metadata in ``RE.md["startup_git_metadata"]`` (``ref``, ``branch``, ``dirty``) via the new ``configure_base(startup_dir=...)`` argument by `@josephhanrahan <https://github.com/josephhanrahan>`_ in https://github.com/NSLS2/nslsii/pull/266
+* Allow for passing through a Windows drive letter to ``NSLS2PathProvider``: new ``base_data_dir`` and ``base_write_dir`` arguments, ``directory_uri`` in the returned ``PathInfo``, string ``granularity`` names, and new ``TimestampFilenameProvider`` and ``REMetadataFilenameProvider`` by `@jwlodek <https://github.com/jwlodek>`_ in https://github.com/NSLS2/nslsii/pull/231
+* Add ``scan_id_padding`` parameter (default 6) to ``NSLS2PathProvider`` by `@sligara7 <https://github.com/sligara7>`_ in https://github.com/NSLS2/nslsii/pull/308
+* Remove old, now unused files (``.travis.yml``, ``.flake8``, deploy key) by `@jwlodek <https://github.com/jwlodek>`_ in https://github.com/NSLS2/nslsii/pull/310
+* Split ``nslsii.utils`` into a package; add ``ProposalIDPrompt``, an IPython prompt showing the current ``data_session`` by `@jwlodek <https://github.com/jwlodek>`_ in https://github.com/NSLS2/nslsii/pull/312
+* Pin the supported Python versions; remove the unused ``shortuuid`` dependency by `@jwlodek <https://github.com/jwlodek>`_ in https://github.com/NSLS2/nslsii/pull/311
+* ``NSLS2PathProvider`` passes the data key name to its filename provider by `@jwlodek <https://github.com/jwlodek>`_ in https://github.com/NSLS2/nslsii/pull/313
+* Make ``dev`` the default environment for the pixi dev tasks by `@jwlodek <https://github.com/jwlodek>`_ in https://github.com/NSLS2/nslsii/pull/314
+* Ophyd-async device for the Xspress3 detector (community IOC): ``Xspress3Detector``, ``Xspress3HDFWriterFactory``, and related classes in ``nslsii.ophyd_async.devices``. Also fixes ``import nslsii.ophyd_async.devices``, which failed in v0.11.10 with ``ModuleNotFoundError: No module named 'rbd9103'``, by `@thopkins32 <https://github.com/thopkins32>`_ in https://github.com/NSLS2/nslsii/pull/269
+* Add profile helpers ``nslsii.utils.print_proposal_info`` and ``nslsii.utils.print_version_info``; move ``RBD9103`` to ``ophyd_async.epics.core`` imports by `@jwlodek <https://github.com/jwlodek>`_ in https://github.com/NSLS2/nslsii/pull/316
+* Add opt-in JSON-lines logging for Bluesky sessions: ``nslsii.configure_bluesky_json_logging(RE=RE)`` writes log records and Bluesky document summaries to ``$BLUESKY_JSON_LOG_DIR`` (default ``/var/log/bluesky``) for log collectors such as Grafana Alloy/Loki by `@thopkins32 <https://github.com/thopkins32>`_ in https://github.com/NSLS2/nslsii/pull/315
+
+**Breaking Changes**
+
+* ``nslsii.ophyd_async.AcqModeFilenameProvider`` is removed; use ``REMetadataFilenameProvider`` or ``TimestampFilenameProvider`` instead (https://github.com/NSLS2/nslsii/pull/231)
+* ``NSLS2PathProvider`` constructor changes (https://github.com/NSLS2/nslsii/pull/231):
+
+  * ``beamline_tla`` and ``beamline_tla_suffix`` are removed; pass ``base_data_dir=PurePosixPath("/nsls2/data/<tla>/proposals")`` instead
+  * Positional parameter order is now ``metadata_dict, base_data_dir, base_write_dir, filename_provider, granularity, separator, include_scan_id_dir, scan_id_padding``. Pass everything after ``metadata_dict`` by keyword: a v0.11.10-style ``NSLS2PathProvider(RE.md, UUIDFilenameProvider())`` now raises ``TypeError`` when a path is generated
+  * Raises ``ValueError`` at construction if ``base_data_dir`` is not given and neither ``ENDSTATION_ACRONYM`` nor ``BEAMLINE_ACRONYM`` is set (previously it silently produced ``/nsls2/data/proposals/...``)
+  * ``generate_directory_path()`` is no longer public
+
+* ``NSLS2PathProvider`` now calls ``filename_provider(datakey_name)``, so custom filename providers must accept the ophyd-async ``FilenameProvider`` signature ``__call__(self, datakey_name: str | None = None)``. ``TimestampFilenameProvider`` and ``REMetadataFilenameProvider`` prefix filenames with the data key name; ``UUIDFilenameProvider`` output is unchanged (https://github.com/NSLS2/nslsii/pull/313)
+* Requires ``ophyd-async[ca]>=0.21.3`` (https://github.com/NSLS2/nslsii/pull/269)
+* Requires Python ``>=3.11,<3.14``; v0.11.10 had no upper bound. Python 3.14 is excluded because of a Tiled dependency conflict (https://github.com/NSLS2/nslsii/pull/311, https://github.com/NSLS2/nslsii/pull/269)
+* ``nslsii.utils`` is now a package. ``from nslsii.utils import open_redis_client`` still works; ``redis_hosts`` moved to ``nslsii.utils.redis`` (https://github.com/NSLS2/nslsii/pull/312)
+
+**New Contributors**
+
+* `@josephhanrahan <https://github.com/josephhanrahan>`_ made their first contribution in https://github.com/NSLS2/nslsii/pull/266
+* `@sligara7 <https://github.com/sligara7>`_ made their first contribution in https://github.com/NSLS2/nslsii/pull/308
+
+**Full Changelog**: https://github.com/NSLS2/nslsii/compare/0.11.10...v0.12.0
+
+
+v0.11.10 (2026-08-24)
+=====================
 What's Changed
 ..............
 * ENH: Add ``--version``/``-V`` argument to ``sync-experiment`` CLI by `@mrakitin <https://github.com/mrakitin>`_ in https://github.com/NSLS2/nslsii/pull/256
@@ -15,7 +54,7 @@ What's Changed
 
 * `@jmaruland <https://github.com/jmaruland>`_ made their first contribution in https://github.com/NSLS2/nslsii/pull/249
 
-**Full Changelog**: https://github.com/NSLS2/nslsii/compare/v0.11.9...HEAD
+**Full Changelog**: https://github.com/NSLS2/nslsii/compare/v0.11.9...0.11.10
 
 
 v0.11.9 (2026-05-04)
