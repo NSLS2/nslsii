@@ -199,9 +199,9 @@ def test_failed_run_stop_line_has_reason(RE, json_log_dir):
     assert (stop["document"], stop["exit_status"], stop["reason"]) == ("stop", "fail", "shutter did not open")
 
 
-@pytest.mark.parametrize("log_events", [False, True])
-def test_asset_and_page_document_summaries(log_events, RE, json_log_dir):
-    configure_bluesky_json_logging(RE=RE, log_events=log_events)
+def test_asset_and_page_document_summaries(RE, json_log_dir):
+    # event pages are summarized without log_events
+    configure_bluesky_json_logging(RE=RE)
     proposal_dir = "/nsls2/data/tst/proposals/2026-3/pass-123456"
     # (name, document, expected summary, or None if never summarized)
     documents = [
@@ -274,9 +274,7 @@ def test_asset_and_page_document_summaries(log_events, RE, json_log_dir):
         RE.dispatcher.process(DocumentNames[name], doc)
 
     assert [_without_time(line) for line in _document_lines(json_log_dir)] == [
-        {"document": name, **summary, "run_uids": ""}
-        for name, _, summary in documents
-        if summary is not None and (log_events or name != "event_page")
+        {"document": name, **summary, "run_uids": ""} for name, _, summary in documents if summary is not None
     ]
     for path in (_log_file(json_log_dir), _documents_file(json_log_dir)):
         assert "pass-123456" not in path.read_text()

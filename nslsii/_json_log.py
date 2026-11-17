@@ -29,7 +29,9 @@ DOCUMENT_LOGGER_NAME = "nslsii.documents"
 # stop reason, and the number of events in each stream. Data, configuration,
 # metadata, file paths, and the document's own timestamp are *not* included.
 # Datum and stream datum documents are not summarized: a run has one for each
-# detector (or data key) at each point or collection.
+# detector (or data key) at each point or collection. Events, one per point,
+# are summarized only if requested; event pages, one per stream for each
+# collect, always are.
 SUMMARY_FIELDS: dict[str, tuple[str, ...]] = {
     "start": ("uid", "scan_id"),
     "descriptor": ("uid", "run_start", "name"),
@@ -39,8 +41,6 @@ SUMMARY_FIELDS: dict[str, tuple[str, ...]] = {
     "resource": ("uid", "run_start", "spec"),
     "stream_resource": ("uid", "run_start", "data_key", "mimetype"),
 }
-# Summarized only if requested, since they add a line for every point.
-EVENT_DOCUMENTS = frozenset({"event", "event_page"})
 
 
 def document_summary(name: str, doc: Mapping[str, Any]) -> dict[str, Any]:
@@ -80,8 +80,8 @@ class OpenRuns:
 
 class DocumentSummaryLoggingCallback:
     """RunEngine callback that logs a summary of each document named in
-    ``SUMMARY_FIELDS``, of events and event pages only if ``log_events``, and
-    keeps ``open_runs`` current.
+    ``SUMMARY_FIELDS``, of events only if ``log_events``, and keeps
+    ``open_runs`` current.
 
     Each document is logged to ``logger`` at INFO with the document name as the
     message and ``{"document": name, **summary}`` as the record's
@@ -91,7 +91,7 @@ class DocumentSummaryLoggingCallback:
     def __init__(self, logger: logging.Logger, open_runs: OpenRuns, log_events: bool) -> None:
         self._logger = logger
         self._open_runs = open_runs
-        self._names = frozenset(SUMMARY_FIELDS) if log_events else frozenset(SUMMARY_FIELDS) - EVENT_DOCUMENTS
+        self._names = frozenset(SUMMARY_FIELDS) if log_events else frozenset(SUMMARY_FIELDS) - {"event"}
 
     def __call__(self, name: str, doc: Mapping[str, Any]) -> None:
         if name not in self._names:
@@ -203,9 +203,10 @@ def configure_bluesky_json_logging(
     ophyd_async, and nslsii loggers, of any ``extra_loggers``, and of
     ``ipython.log`` if ``ipython`` is given, to a JSON-lines file for log
     collectors such as Grafana Alloy. If ``RE`` is given, also write a summary
-    of each of its start, descriptor, resource, stream resource, and stop
-    documents, and of its events if ``log_events``, to a second JSON-lines
-    file. Each stop line includes the run's number of events in each stream.
+    of each of its start, descriptor, event page, resource, stream resource,
+    and stop documents, and of its events if ``log_events``, to a second
+    JSON-lines file. Each stop line includes the run's number of events in
+    each stream.
 
     This is opt-in: ``configure_base`` does not call it. It is independent of
     ``configure_bluesky_logging`` and can be used with or without it.
@@ -228,9 +229,9 @@ def configure_bluesky_json_logging(
         beamline-specific packages; they are set to INFO like the default
         loggers. Name the top of each logger tree to avoid duplicate logs.
     log_events: bool, optional
-        Also summarize every event and event page of ``RE``, one line each,
-        to follow the progress of runs. Off by default because it adds a line
-        for every point of every stream.
+        Also summarize every event of ``RE``, one line each, to follow the
+        progress of step scans. Off by default because it adds a line for
+        every point of every stream.
 
     Returns
     -------
