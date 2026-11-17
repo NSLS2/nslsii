@@ -24,22 +24,23 @@ DEFAULT_LOG_DIR = "/var/log/bluesky"
 # Logger of the Bluesky document lines. Each record carries the line's fields
 # as its ``document_fields`` attribute.
 DOCUMENT_LOGGER_NAME = "nslsii.documents"
-# The fields of each document type kept in its summary: uids, links to other
-# documents, positions within streams and resources, a few identifiers, and
-# the stop reason. Data, configuration, metadata, file paths, and the
-# document's own timestamp are *not* included.
+# The documents summarized, each with the fields kept in its summary: uids,
+# links to other documents, positions within streams, a few identifiers, the
+# stop reason, and the number of events in each stream. Data, configuration,
+# metadata, file paths, and the document's own timestamp are *not* included.
+# Datum and stream datum documents are not summarized: a run has one for each
+# detector (or data key) at each point or collection.
 SUMMARY_FIELDS: dict[str, tuple[str, ...]] = {
     "start": ("uid", "scan_id"),
     "descriptor": ("uid", "run_start", "name"),
-    "event": ("uid", "descriptor", "seq_num"),
+    "event": ("descriptor", "seq_num"),
     "event_page": ("descriptor",),
-    "stop": ("uid", "run_start", "exit_status", "reason"),
+    "stop": ("uid", "run_start", "exit_status", "reason", "num_events"),
     "resource": ("uid", "run_start", "spec"),
-    "datum": ("datum_id", "resource"),
-    "datum_page": ("datum_id", "resource"),
     "stream_resource": ("uid", "run_start", "data_key", "mimetype"),
-    "stream_datum": ("uid", "descriptor", "stream_resource", "seq_nums", "indices"),
 }
+# Summarized only if requested, since they add a line for every point.
+EVENT_DOCUMENTS = frozenset({"event", "event_page"})
 
 
 def document_summary(name: str, doc: Mapping[str, Any]) -> dict[str, Any]:
@@ -49,7 +50,7 @@ def document_summary(name: str, doc: Mapping[str, Any]) -> dict[str, Any]:
     This runs in the RunEngine thread, where an exception aborts the run, so
     optional fields are copied only if present and empty pages are handled.
     """
-    summary = {key: doc[key] for key in SUMMARY_FIELDS.get(name, ()) if key in doc}
+    summary = {key: doc[key] for key in SUMMARY_FIELDS[name] if key in doc}
     if name == "event_page":
         # Special handling of the potentially long list of sequence numbers
         seq_nums = doc.get("seq_num", ())
@@ -78,19 +79,23 @@ class OpenRuns:
 
 
 class DocumentSummaryLoggingCallback:
-    """RunEngine callback that logs a summary of every document and keeps
-    ``open_runs`` current.
+    """RunEngine callback that logs a summary of each document named in
+    ``SUMMARY_FIELDS``, of events and event pages only if ``log_events``, and
+    keeps ``open_runs`` current.
 
     Each document is logged to ``logger`` at INFO with the document name as the
     message and ``{"document": name, **summary}`` as the record's
     ``document_fields`` attribute.
     """
 
-    def __init__(self, logger: logging.Logger, open_runs: OpenRuns) -> None:
+    def __init__(self, logger: logging.Logger, open_runs: OpenRuns, log_events: bool) -> None:
         self._logger = logger
         self._open_runs = open_runs
+        self._names = frozenset(SUMMARY_FIELDS) if log_events else frozenset(SUMMARY_FIELDS) - EVENT_DOCUMENTS
 
     def __call__(self, name: str, doc: Mapping[str, Any]) -> None:
+        if name not in self._names:
+            return
         # Add a run before logging its start and remove it after logging its
         # stop, so both lines list their own run.
         if name == "start":
@@ -190,13 +195,17 @@ def configure_bluesky_json_logging(
     ipython: InteractiveShell | None = None,
     RE: RunEngine | None = None,
     extra_loggers: Iterable[str] = (),
+    *,
+    log_events: bool = False,
 ) -> list[Path]:
     """
     Write the log records at level INFO and above of the bluesky, ophyd,
     ophyd_async, and nslsii loggers, of any ``extra_loggers``, and of
     ``ipython.log`` if ``ipython`` is given, to a JSON-lines file for log
     collectors such as Grafana Alloy. If ``RE`` is given, also write a summary
-    of every document it emits to a second JSON-lines file.
+    of each of its start, descriptor, resource, stream resource, and stop
+    documents, and of its events if ``log_events``, to a second JSON-lines
+    file. Each stop line includes the run's number of events in each stream.
 
     This is opt-in: ``configure_base`` does not call it. It is independent of
     ``configure_bluesky_logging`` and can be used with or without it.
@@ -218,6 +227,10 @@ def configure_bluesky_json_logging(
         Names of more loggers to write to the JSON log, such as those of
         beamline-specific packages; they are set to INFO like the default
         loggers. Name the top of each logger tree to avoid duplicate logs.
+    log_events: bool, optional
+        Also summarize every event and event page of ``RE``, one line each,
+        to follow the progress of runs. Off by default because it adds a line
+        for every point of every stream.
 
     Returns
     -------
@@ -252,6 +265,6 @@ def configure_bluesky_json_logging(
             document_logger.propagate = False
             document_logger.addHandler(document_handler)
             document_logger.setLevel(logging.INFO)
-            RE.subscribe(DocumentSummaryLoggingCallback(document_logger, open_runs))
+            RE.subscribe(DocumentSummaryLoggingCallback(document_logger, open_runs, log_events))
             paths.append(documents_path)
     return paths

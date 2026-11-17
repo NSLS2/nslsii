@@ -142,8 +142,10 @@ def test_run_uids_with_overlapping_runs(RE, json_log_dir):
     assert run_uids["no run open"] == ""
 
 
-def test_document_lines(RE, hw, json_log_dir):
-    assert configure_bluesky_json_logging(RE=RE) == [_log_file(json_log_dir), _documents_file(json_log_dir)]
+@pytest.mark.parametrize("log_events", [False, True])
+def test_document_lines(log_events, RE, hw, json_log_dir):
+    paths = configure_bluesky_json_logging(RE=RE, log_events=log_events)
+    assert paths == [_log_file(json_log_dir), _documents_file(json_log_dir)]
     docs = []
     RE.subscribe(lambda name, doc: docs.append(doc))
     nslsii_stream = io.StringIO()
@@ -154,19 +156,23 @@ def test_document_lines(RE, hw, json_log_dir):
     finally:
         logging.getLogger("nslsii").removeHandler(nslsii_handler)
 
-    start, descriptor, event1, event2, stop = docs
+    start, descriptor, _, _, stop = docs
     run = start["uid"]
+    event_lines = [
+        {"document": "event", "descriptor": descriptor["uid"], "seq_num": seq_num, "run_uids": run}
+        for seq_num in (1, 2)
+    ]
     assert [_without_time(line) for line in _document_lines(json_log_dir)] == [
         {"document": "start", "uid": run, "scan_id": start["scan_id"], "run_uids": run},
         {"document": "descriptor", "uid": descriptor["uid"], "run_start": run, "name": "primary", "run_uids": run},
-        {"document": "event", "uid": event1["uid"], "descriptor": descriptor["uid"], "seq_num": 1, "run_uids": run},
-        {"document": "event", "uid": event2["uid"], "descriptor": descriptor["uid"], "seq_num": 2, "run_uids": run},
+        *(event_lines if log_events else []),
         {
             "document": "stop",
             "uid": stop["uid"],
             "run_start": run,
             "exit_status": "success",
             "reason": "",
+            "num_events": {"primary": 2},
             "run_uids": run,
         },
     ]
@@ -193,10 +199,11 @@ def test_failed_run_stop_line_has_reason(RE, json_log_dir):
     assert (stop["document"], stop["exit_status"], stop["reason"]) == ("stop", "fail", "shutter did not open")
 
 
-def test_asset_and_page_document_summaries(RE, json_log_dir):
-    configure_bluesky_json_logging(RE=RE)
+@pytest.mark.parametrize("log_events", [False, True])
+def test_asset_and_page_document_summaries(log_events, RE, json_log_dir):
+    configure_bluesky_json_logging(RE=RE, log_events=log_events)
     proposal_dir = "/nsls2/data/tst/proposals/2026-3/pass-123456"
-    # (name, document, expected summary)
+    # (name, document, expected summary, or None if never summarized)
     documents = [
         (
             "resource",
@@ -214,12 +221,12 @@ def test_asset_and_page_document_summaries(RE, json_log_dir):
         (
             "datum",
             {"datum_id": "r1/0", "resource": "r1", "datum_kwargs": {"point_number": 0}},
-            {"datum_id": "r1/0", "resource": "r1"},
+            None,
         ),
         (
             "datum_page",
             {"datum_id": ["r1/1", "r1/2"], "resource": "r1", "datum_kwargs": {"point_number": [1, 2]}},
-            {"datum_id": ["r1/1", "r1/2"], "resource": "r1"},
+            None,
         ),
         (
             "event_page",
@@ -260,20 +267,16 @@ def test_asset_and_page_document_summaries(RE, json_log_dir):
                 "seq_nums": {"start": 1, "stop": 11},
                 "indices": {"start": 0, "stop": 10},
             },
-            {
-                "uid": "sr1/0",
-                "stream_resource": "sr1",
-                "descriptor": "d1",
-                "seq_nums": {"start": 1, "stop": 11},
-                "indices": {"start": 0, "stop": 10},
-            },
+            None,
         ),
     ]
     for name, doc, _ in documents:
         RE.dispatcher.process(DocumentNames[name], doc)
 
     assert [_without_time(line) for line in _document_lines(json_log_dir)] == [
-        {"document": name, **summary, "run_uids": ""} for name, _, summary in documents
+        {"document": name, **summary, "run_uids": ""}
+        for name, _, summary in documents
+        if summary is not None and (log_events or name != "event_page")
     ]
     for path in (_log_file(json_log_dir), _documents_file(json_log_dir)):
         assert "pass-123456" not in path.read_text()
@@ -341,10 +344,10 @@ def test_files_reopened_after_rename_or_delete(removal, RE, hw, json_log_dir):
     RE(count([hw.det], num=1))
 
     assert _nslsii_messages(_log_file(json_log_dir)) == ["after"]
-    assert _document_names(_documents_file(json_log_dir)) == ["start", "descriptor", "event", "stop"]
+    assert _document_names(_documents_file(json_log_dir)) == ["start", "descriptor", "stop"]
     if removal == "renamed":
         assert _nslsii_messages(_rotated(_log_file(json_log_dir))) == ["before"]
-        assert _document_names(_rotated(_documents_file(json_log_dir))) == ["start", "descriptor", "event", "stop"]
+        assert _document_names(_rotated(_documents_file(json_log_dir))) == ["start", "descriptor", "stop"]
 
 
 def test_reopen_failure_does_not_interrupt_runs(RE, hw, json_log_dir):
@@ -365,4 +368,4 @@ def test_reopen_failure_does_not_interrupt_runs(RE, hw, json_log_dir):
     logging.getLogger("nslsii").info("recovered")
     RE(count([hw.det], num=1))
     assert _nslsii_messages(_log_file(json_log_dir)) == ["recovered"]
-    assert _document_names(_documents_file(json_log_dir)) == ["start", "descriptor", "event", "stop"]
+    assert _document_names(_documents_file(json_log_dir)) == ["start", "descriptor", "stop"]
