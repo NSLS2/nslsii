@@ -1,3 +1,17 @@
+from .beckhoff_gpio import (
+    BECKHOFF_TERMINAL_MODELS,
+    BeckhoffAnalogInput,
+    BeckhoffAnalogOutput,
+    BeckhoffChannel,
+    BeckhoffChannelKind,
+    BeckhoffDigitalInput,
+    BeckhoffDigitalOutput,
+    BeckhoffEK9000Status,
+    BeckhoffGPIO,
+    BeckhoffRelayOutput,
+    BeckhoffTerminal,
+    BeckhoffThermocouple,
+)
 from .rbd9103 import (
     RBD9103,
     RBD9103Range,
@@ -25,6 +39,18 @@ from .xspress3 import (
 
 
 __all__ = [
+    "BECKHOFF_TERMINAL_MODELS",
+    "BeckhoffAnalogInput",
+    "BeckhoffAnalogOutput",
+    "BeckhoffChannel",
+    "BeckhoffChannelKind",
+    "BeckhoffDigitalInput",
+    "BeckhoffDigitalOutput",
+    "BeckhoffEK9000Status",
+    "BeckhoffGPIO",
+    "BeckhoffRelayOutput",
+    "BeckhoffTerminal",
+    "BeckhoffThermocouple",
     "RBD9103",
     "RBD9103Range",
     "RBD9103Input",
