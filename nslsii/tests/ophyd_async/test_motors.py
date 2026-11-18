@@ -13,7 +13,7 @@ PREFIX = "XF:31ID1-ES{Stg:1-Ax:"
     "stage_cls, axes",
     [(XYStage, ("x", "y")), (XZStage, ("x", "z")), (YZStage, ("y", "z")), (XYZStage, ("x", "y", "z"))],
 )
-def test_stage_axes_and_pv_names(stage_cls, axes):
+def test_stage_axes_and_pv_names(stage_cls: type[MotorizedStage], axes: tuple[str, ...]):
     stage = stage_cls(PREFIX, name="stage")
     assert tuple(stage.axes) == axes
     for axis, motor in stage.axes.items():
@@ -22,7 +22,7 @@ def test_stage_axes_and_pv_names(stage_cls, axes):
 
 
 @pytest.mark.parametrize("prefix", ["XF:31ID1-ES{Stg:1", "XF:31ID1-ES{Stg:1-Ax:"])
-def test_prefix_with_or_without_ax(prefix):
+def test_prefix_with_or_without_ax(prefix: str):
     stage = XYStage(prefix)
     assert stage.x.user_setpoint.source == "ca://XF:31ID1-ES{Stg:1-Ax:X}Mtr.VAL"
 
