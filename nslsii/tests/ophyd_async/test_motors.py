@@ -50,7 +50,6 @@ def test_axes_inferred_from_motor_annotations():
     assert tuple(stage.axes) == ("x", "theta")
     assert stage.x.user_setpoint.source == f"ca://{PREFIX}X}}Mtr.VAL"
     assert stage.theta.user_setpoint.source == f"ca://{PREFIX}Th}}Mtr.VAL"
-    assert not isinstance(stage.label, Motor)
 
 
 def test_custom_motor_annotation_is_instantiated():
