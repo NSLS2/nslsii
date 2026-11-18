@@ -1,3 +1,4 @@
+from .motors import MotorizedStage, XYStage, XYZStage, XZStage, YZStage
 from .rbd9103 import (
     RBD9103,
     RBD9103Range,
@@ -25,6 +26,11 @@ from .xspress3 import (
 
 
 __all__ = [
+    "MotorizedStage",
+    "XYStage",
+    "XYZStage",
+    "XZStage",
+    "YZStage",
     "RBD9103",
     "RBD9103Range",
     "RBD9103Input",
