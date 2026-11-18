@@ -71,12 +71,9 @@ async def test_set_moves_axes():
 
 
 def test_stage_in_plans(RE):
-    async def connect():
-        async with init_devices(mock=True):
-            stage = XYStage(PREFIX)
-        return stage
+    with init_devices(mock=True):
+        stage = XYStage(PREFIX)
 
-    stage = call_in_bluesky_event_loop(connect())
     docs = []
     RE(bps.mv(stage, (1.5, -2.5)))
     RE(bps.mv(stage.x, 4.0))
