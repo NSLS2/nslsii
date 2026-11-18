@@ -7,7 +7,8 @@ PV names follow the NSLS-II convention ``{prefix}-Ax:{axis}}}Mtr``, e.g. with
 
 import asyncio
 from collections.abc import Mapping, Sequence
-from typing import Any, ClassVar, get_type_hints
+from dataclasses import dataclass
+from typing import Annotated, Any, ClassVar, get_origin, get_type_hints
 
 from bluesky.protocols import Locatable, Location, Stoppable
 from ophyd_async.core import StandardReadable, WatchableAsyncStatus, forward_watcher_updates
@@ -15,6 +16,17 @@ from ophyd_async.core import StandardReadableFormat as Format
 from ophyd_async.epics.motor import Motor
 
 StagePosition = Sequence[float | None] | Mapping[str, float]
+
+
+@dataclass(frozen=True)
+class AxisSuffix:
+    """``Annotated`` metadata giving an axis's default PV axis component.
+
+    For example ``theta: Annotated[Motor, AxisSuffix("Th")]`` uses ``...-Ax:Th}Mtr``
+    rather than ``...-Ax:THETA}Mtr``.
+    """
+
+    suffix: str
 
 
 class MotorizedStage(StandardReadable, Locatable[StagePosition], Stoppable):
@@ -27,7 +39,14 @@ class MotorizedStage(StandardReadable, Locatable[StagePosition], Stoppable):
 
     Axes may also be annotated with a subclass of ``Motor``, which is then used to create
     that axis. Such subclasses must take the PV prefix as their only positional argument;
-    any other constructor arguments must be keyword arguments, passed via ``axis_kwargs``.
+    any other constructor arguments must be keyword arguments, passed via ``axis_kwargs``
+    or as a mapping in ``typing.Annotated`` metadata, e.g.
+    ``z: Annotated[CustomMotor, {"some_option": 1.0}]``. Kwargs given via ``axis_kwargs``
+    take precedence over those given via ``Annotated``.
+
+    An axis's default PV axis component can be set with ``AxisSuffix`` in its
+    ``Annotated`` metadata, e.g. ``theta: Annotated[Motor, AxisSuffix("Th")]``. Values
+    passed via ``axis_suffixes`` take precedence over it.
 
     Parameters
     ----------
@@ -38,7 +57,7 @@ class MotorizedStage(StandardReadable, Locatable[StagePosition], Stoppable):
         Name of the device.
     axis_suffixes : Mapping[str, str], optional
         Per-axis override of the PV axis component, e.g. ``{"x": "X1"}``. Defaults to
-        the upper-cased attribute name.
+        the axis's ``AxisSuffix``, or the upper-cased attribute name if it has none.
     axis_kwargs : Mapping[str, Mapping[str, Any]], optional
         Per-axis keyword arguments passed to that axis's motor constructor, e.g.
         ``{"z": {"some_option": 1.0}}`` for an axis annotated with a custom ``Motor``
@@ -52,16 +71,32 @@ class MotorizedStage(StandardReadable, Locatable[StagePosition], Stoppable):
     """
 
     _axes: ClassVar[dict[str, type[Motor]]] = {}
+    _axis_default_kwargs: ClassVar[dict[str, dict[str, Any]]] = {}
+    _axis_default_suffixes: ClassVar[dict[str, str]] = {}
 
     def __init_subclass__(cls, **kwargs):
-        """Automatically infer the axes and their motor types from the subclass's Motor annotations."""
+        """Automatically infer the axes, their motor types, and any default motor kwargs
+        and PV axis components given via ``Annotated`` from the subclass's Motor annotations."""
 
         super().__init_subclass__(**kwargs)
-        cls._axes = {
-            attr: hint
-            for attr, hint in get_type_hints(cls).items()
-            if isinstance(hint, type) and issubclass(hint, Motor)
-        }
+        cls._axes = {}
+        cls._axis_default_kwargs = {}
+        cls._axis_default_suffixes = {}
+        for attr, hint in get_type_hints(cls, include_extras=True).items():
+            metadata: tuple[Any, ...] = ()
+            if get_origin(hint) is Annotated:
+                hint, metadata = hint.__origin__, hint.__metadata__
+            if isinstance(hint, type) and issubclass(hint, Motor):
+                cls._axes[attr] = hint
+                cls._axis_default_kwargs[attr] = {
+                    key: value
+                    for item in metadata
+                    if isinstance(item, Mapping)
+                    for key, value in item.items()
+                }
+                for item in metadata:
+                    if isinstance(item, AxisSuffix):
+                        cls._axis_default_suffixes[attr] = item.suffix
 
     def __init__(
         self,
@@ -84,8 +119,11 @@ class MotorizedStage(StandardReadable, Locatable[StagePosition], Stoppable):
             prefix = f"{prefix}-Ax:"
         with self.add_children_as_readables():
             for axis, motor_cls in self._axes.items():
-                pv_axis = axis_suffixes.get(axis, axis.upper())
-                motor = motor_cls(f"{prefix}{pv_axis}{motor_suffix}", **axis_kwargs.get(axis, {}))
+                pv_axis = axis_suffixes.get(
+                    axis, self._axis_default_suffixes.get(axis, axis.upper())
+                )
+                kwargs = {**self._axis_default_kwargs[axis], **axis_kwargs.get(axis, {})}
+                motor = motor_cls(f"{prefix}{pv_axis}{motor_suffix}", **kwargs)
                 setattr(self, axis, motor)
         super().__init__(name=name)
 
@@ -171,3 +209,96 @@ class YZStage(MotorizedStage):
 
     y: Motor
     z: Motor
+
+
+class XYThetaStage(XYStage):
+    """Stage with X and Y axes and a theta rotation (PV axis ``Th``)."""
+
+    theta: Annotated[Motor, AxisSuffix("Th")]
+
+
+class XYZThetaStage(XYZStage):
+    """Stage with X, Y and Z axes and a theta rotation (PV axis ``Th``)."""
+
+    theta: Annotated[Motor, AxisSuffix("Th")]
+
+
+class XYPitchStage(XYStage):
+    """Stage with X and Y axes and pitch (PV axis ``P``)."""
+
+    pitch: Annotated[Motor, AxisSuffix("P")]
+
+
+class XYPitchRollYawStage(XYPitchStage):
+    """Stage with X and Y axes and pitch, roll and yaw rotations (PV axes ``P``, ``R``, ``Yaw``)."""
+
+    roll: Annotated[Motor, AxisSuffix("R")]
+    yaw: Annotated[Motor, AxisSuffix("Yaw")]
+
+
+class XYZPitchRollYawStage(MotorizedStage):
+    """Six-axis stage, e.g. a hexapod, with X, Y and Z axes and pitch, roll and yaw
+    rotations (PV axes ``P``, ``R``, ``Yaw``)."""
+
+    x: Motor
+    y: Motor
+    z: Motor
+    pitch: Annotated[Motor, AxisSuffix("P")]
+    roll: Annotated[Motor, AxisSuffix("R")]
+    yaw: Annotated[Motor, AxisSuffix("Yaw")]
+
+
+class KBMirror(StandardReadable, Stoppable):
+    """Kirkpatrick-Baez mirror pair, made up of a horizontally and a vertically focusing mirror.
+
+    Each mirror is a ``MotorizedStage``, by default an ``XYPitchStage``, with PV prefix
+    ``{prefix}{Mir:KBH-Ax:`` for the horizontal mirror and ``{prefix}{Mir:KBV-Ax:`` for
+    the vertical one, e.g. with ``prefix="XF:17IDB-OP:AMX"`` the horizontal mirror's pitch
+    motor is ``XF:17IDB-OP:AMX{Mir:KBH-Ax:P}Mtr``.
+
+    Parameters
+    ----------
+    prefix : str
+        PV prefix up to the device component, e.g. ``"XF:17IDB-OP:AMX"``. A trailing
+        ``{Mir`` or ``{Mir:`` is also accepted.
+    name : str
+        Name of the device.
+    horizontal_cls, vertical_cls : type[MotorizedStage]
+        Stage classes used for each mirror, ``XYPitchStage`` by default. Use a custom
+        ``MotorizedStage`` subclass for mirrors with other axes, e.g. upstream and
+        downstream legs.
+    horizontal_id, vertical_id : str
+        Device ids of each mirror, ``"KBH"`` and ``"KBV"`` by default.
+    horizontal_kwargs, vertical_kwargs : Mapping[str, Any], optional
+        Keyword arguments passed to each mirror's stage constructor, e.g.
+        ``{"axis_suffixes": {"x": "XU"}}``.
+    """
+
+    horizontal: MotorizedStage
+    vertical: MotorizedStage
+
+    def __init__(
+        self,
+        prefix: str,
+        name: str = "",
+        horizontal_cls: type[MotorizedStage] = XYPitchStage,
+        vertical_cls: type[MotorizedStage] = XYPitchStage,
+        horizontal_id: str = "KBH",
+        vertical_id: str = "KBV",
+        horizontal_kwargs: Mapping[str, Any] | None = None,
+        vertical_kwargs: Mapping[str, Any] | None = None,
+    ):
+        prefix = prefix.removesuffix(":").removesuffix("{Mir")
+        with self.add_children_as_readables():
+            self.horizontal = horizontal_cls(
+                f"{prefix}{{Mir:{horizontal_id}", **(horizontal_kwargs or {})
+            )
+            self.vertical = vertical_cls(f"{prefix}{{Mir:{vertical_id}", **(vertical_kwargs or {}))
+        super().__init__(name=name)
+
+    async def stop(self, success: bool = False):
+        """Stop both mirrors."""
+
+        await asyncio.gather(
+            self.horizontal.stop(success=success), self.vertical.stop(success=success)
+        )

@@ -1,4 +1,17 @@
-from .motors import MotorizedStage, XYStage, XYZStage, XZStage, YZStage
+from .motors import (
+    AxisSuffix,
+    KBMirror,
+    MotorizedStage,
+    XYPitchRollYawStage,
+    XYPitchStage,
+    XYStage,
+    XYThetaStage,
+    XYZPitchRollYawStage,
+    XYZStage,
+    XYZThetaStage,
+    XZStage,
+    YZStage,
+)
 from .rbd9103 import (
     RBD9103,
     RBD9103Range,
@@ -26,9 +39,16 @@ from .xspress3 import (
 
 
 __all__ = [
+    "AxisSuffix",
+    "KBMirror",
     "MotorizedStage",
+    "XYPitchRollYawStage",
+    "XYPitchStage",
     "XYStage",
+    "XYThetaStage",
+    "XYZPitchRollYawStage",
     "XYZStage",
+    "XYZThetaStage",
     "XZStage",
     "YZStage",
     "RBD9103",
