@@ -53,6 +53,33 @@ def test_axes_inferred_from_motor_annotations():
     assert not isinstance(stage.label, Motor)
 
 
+def test_custom_motor_annotation_is_instantiated():
+    class CustomMotor(Motor):
+        def __init__(self, prefix: str, name: str = "", *, gear_ratio: float = 1.0):
+            self.gear_ratio = gear_ratio
+            super().__init__(prefix, name=name)
+
+    class CustomStage(XYStage):
+        z: CustomMotor
+
+    stage = CustomStage(PREFIX, axis_kwargs={"z": {"gear_ratio": 2.5}})
+    assert type(stage.x) is Motor
+    assert type(stage.z) is CustomMotor
+    assert stage.z.gear_ratio == 2.5
+    assert stage.z.user_setpoint.source == f"ca://{PREFIX}Z}}Mtr.VAL"
+    with pytest.raises(ValueError, match="Unknown axes"):
+        CustomStage(PREFIX, axis_kwargs={"q": {}})
+
+
+@pytest.mark.asyncio
+async def test_locate():
+    async with init_devices(mock=True):
+        stage = XYZStage(PREFIX)
+    await stage.set((1.0, 2.0, 3.0))
+    location = await stage.locate()
+    assert location == {"setpoint": (1.0, 2.0, 3.0), "readback": (1.0, 2.0, 3.0)}
+
+
 @pytest.mark.asyncio
 async def test_set_moves_axes():
     async with init_devices(mock=True):
