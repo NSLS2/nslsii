@@ -350,43 +350,55 @@ async def test_set_rejects_other_values(RE: RunEngine, value):
 
 
 @pytest.mark.asyncio
-async def test_set_rejected_while_an_open_is_pending(RE: RunEngine):
+async def test_close_waits_for_a_pending_open_then_closes(RE: RunEngine):
     sh = _bare_shutter()
     opened = asyncio.Event()
-    closes: list[bool] = []
-    callback_on_mock_execute(sh.close_cmd, lambda *_: closes.append(True))
 
     async def _slow_open(*_):
         await opened.wait()
         set_mock_value(sh.status, ShutterStatus.OPEN)
 
     callback_on_mock_execute(sh.open_cmd, _slow_open)
-
-    opening = sh.set(True)
-    await asyncio.sleep(0.01)  # the open command is out, the status still reads CLOSED
-    assert await sh.status.get_value() is ShutterStatus.CLOSED
-    with pytest.raises(RuntimeError, match="in progress"):
-        await sh.set(False)
-    assert closes == []
-
-    opened.set()
-    await opening
-    assert await sh.status.get_value() is ShutterStatus.OPEN
-
-
-@pytest.mark.asyncio
-async def test_set_rejected_while_settling(RE: RunEngine):
-    sh = _bare_shutter(settle_time=0.2)
     callback_on_mock_execute(
-        sh.open_cmd, lambda *_: set_mock_value(sh.status, ShutterStatus.OPEN)
+        sh.close_cmd, lambda *_: set_mock_value(sh.status, ShutterStatus.CLOSED)
     )
 
     opening = sh.set(True)
-    await asyncio.sleep(0.05)  # status already OPEN, still settling
-    assert await sh.status.get_value() is ShutterStatus.OPEN
-    with pytest.raises(RuntimeError, match="in progress"):
-        await sh.set(False)
+    await asyncio.sleep(0.01)  # the open command is out, the status still reads CLOSED
+    closing = sh.set("Close")
+    await asyncio.sleep(0.01)
+    assert not closing.done  # waiting for the open, not returning early as "already closed"
+
+    opened.set()
     await opening
+    await closing
+    assert await sh.status.get_value() is ShutterStatus.CLOSED
+
+
+@pytest.mark.parametrize("settle_time", [0.0, 0.2])
+@pytest.mark.asyncio
+async def test_open_rejected_while_a_move_is_in_progress(RE: RunEngine, settle_time):
+    sh = _bare_shutter(settle_time=settle_time)
+    set_mock_value(sh.status, ShutterStatus.OPEN)
+    closed = asyncio.Event()
+
+    async def _close(*_):
+        if not settle_time:
+            await closed.wait()  # still actuating
+        set_mock_value(sh.status, ShutterStatus.CLOSED)
+
+    callback_on_mock_execute(sh.close_cmd, _close)
+    opens: list[bool] = []
+    callback_on_mock_execute(sh.open_cmd, lambda *_: opens.append(True))
+
+    closing = sh.set(False)
+    await asyncio.sleep(0.05)  # actuating, or already CLOSED and settling
+    with pytest.raises(RuntimeError, match="Can't open sh"):
+        await sh.set(True)
+    assert opens == []
+
+    closed.set()
+    await closing
 
 
 @pytest.mark.asyncio

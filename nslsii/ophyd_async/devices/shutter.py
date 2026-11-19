@@ -150,8 +150,11 @@ class Shutter(
         self._retries = retries
         self._retry_period = retry_period
         self._status_enum = status_enum
-        # Set while a move, including its retries and settling, is in progress
+        # Set while a move, including its retries and settling, is in progress;
+        # _idle is set whenever it isn't, so a close can wait for the move to finish
         self._moving = False
+        self._idle = asyncio.Event()
+        self._idle.set()
 
         with self.add_children_as_readables(Format.HINTED_SIGNAL):
             self.status = epics_signal_r(status_enum, f"{prefix}Pos-Sts")
@@ -176,6 +179,11 @@ class Shutter(
         Nothing is sent if the shutter is already in the requested state. Otherwise,
         once the status confirms the move, waits ``settle_time`` before completing.
 
+        Only one move runs at a time. A request to close made while another move is in
+        progress (including its retries and settling) waits for that move to finish and
+        then closes, so closing, e.g. in a plan's cleanup after an error, can't be
+        refused and a pending open can't leave the shutter open afterwards.
+
         Parameters
         ----------
         value : bool | Literal[0, 1] | Literal["Open", "Close", "Closed"] | ShutterStatusT
@@ -187,14 +195,17 @@ class Shutter(
         ValueError
             If ``value`` is none of these, e.g. a member of a different status enum.
         RuntimeError
-            If another move of this shutter is still in progress, including its retries
-            and settling, so a pending command can't override this one.
+            If asked to open while another move of this shutter is still in progress.
         """
-        if self._moving:
-            raise RuntimeError(f"Can't set {self.name} while a previous set is in progress")
+        should_open = self._should_open(value)
+        if should_open and self._moving:
+            raise RuntimeError(f"Can't open {self.name} while a previous set is in progress")
+        while self._moving:
+            await self._idle.wait()
+        # No await between the check above and taking the guard here
         self._moving = True
+        self._idle.clear()
         try:
-            should_open = self._should_open(value)
             cmd = self.open_cmd if should_open else self.close_cmd
             target = getattr(self._status_enum, "OPEN" if should_open else "CLOSED")
             if await self.status.get_value() == target:
@@ -203,6 +214,7 @@ class Shutter(
             await asyncio.sleep(await self.settle_time.get_value())
         finally:
             self._moving = False
+            self._idle.set()
 
     def _should_open(
         self, value: bool | Literal[0, 1] | Literal["Open", "Close", "Closed"] | ShutterStatusT
