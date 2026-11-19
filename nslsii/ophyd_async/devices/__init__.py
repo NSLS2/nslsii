@@ -1,5 +1,4 @@
 from .beckhoff_gpio import (
-    BECKHOFF_TERMINAL_MODELS,
     BeckhoffAnalogInput,
     BeckhoffAnalogOutput,
     BeckhoffChannel,
@@ -10,8 +9,10 @@ from .beckhoff_gpio import (
     BeckhoffGPIO,
     BeckhoffRelayOutput,
     BeckhoffTerminal,
-    BeckhoffThermocouple,
+    BeckhoffTerminalModel,
+    BeckhoffTempInput,
 )
+from .motors import MotorizedStage, XYStage, XYZStage, XZStage, YZStage
 from .rbd9103 import (
     RBD9103,
     RBD9103Range,
@@ -39,7 +40,6 @@ from .xspress3 import (
 
 
 __all__ = [
-    "BECKHOFF_TERMINAL_MODELS",
     "BeckhoffAnalogInput",
     "BeckhoffAnalogOutput",
     "BeckhoffChannel",
@@ -50,7 +50,13 @@ __all__ = [
     "BeckhoffGPIO",
     "BeckhoffRelayOutput",
     "BeckhoffTerminal",
-    "BeckhoffThermocouple",
+    "BeckhoffTerminalModel",
+    "BeckhoffTempInput",
+    "MotorizedStage",
+    "XYStage",
+    "XYZStage",
+    "XZStage",
+    "YZStage",
     "RBD9103",
     "RBD9103Range",
     "RBD9103Input",

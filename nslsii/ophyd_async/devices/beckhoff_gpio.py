@@ -107,39 +107,62 @@ class BeckhoffAnalogOutput(BeckhoffChannel, Movable[float]):
         await self.value.set(value)
 
 
-# Supported terminal models -> (channel class, number of channels), as provided by elio-ioc
-BECKHOFF_TERMINAL_MODELS: dict[str, tuple[type[BeckhoffChannel], int]] = {
-    "EL1034": (BeckhoffDigitalInput, 4),
-    "EL1124": (BeckhoffDigitalInput, 4),
-    "EL1808": (BeckhoffDigitalInput, 8),
-    "EL2124": (BeckhoffDigitalOutput, 4),
-    "EL2798": (BeckhoffRelayOutput, 8),
-    "EL2808": (BeckhoffDigitalOutput, 8),
-    "EL3008": (BeckhoffAnalogInput, 8),
-    "EL3068": (BeckhoffAnalogInput, 8),
-    "EL3154": (BeckhoffAnalogInput, 4),
-    "EL3164": (BeckhoffAnalogInput, 4),
-    "EL3314": (BeckhoffTempInput, 4),
-    "EL3318": (BeckhoffTempInput, 8),
-    "EL4008": (BeckhoffAnalogOutput, 8),
-    "EL4038": (BeckhoffAnalogOutput, 8),
-    "EL4104": (BeckhoffAnalogOutput, 4),
-    "EL4134": (BeckhoffAnalogOutput, 4),
-    "EL9505": (BeckhoffDigitalInput, 2),
+class BeckhoffTerminalModel(StrEnum):
+    """Beckhoff EL terminal models supported by the NSLS-II elio IOC."""
+
+    EL1034 = "EL1034"
+    EL1124 = "EL1124"
+    EL1808 = "EL1808"
+    EL2124 = "EL2124"
+    EL2798 = "EL2798"
+    EL2808 = "EL2808"
+    EL3008 = "EL3008"
+    EL3068 = "EL3068"
+    EL3154 = "EL3154"
+    EL3164 = "EL3164"
+    EL3314 = "EL3314"
+    EL3318 = "EL3318"
+    EL4008 = "EL4008"
+    EL4038 = "EL4038"
+    EL4104 = "EL4104"
+    EL4134 = "EL4134"
+    EL9505 = "EL9505"
+
+
+# Each terminal model's channel class and number of channels, as provided by elio-ioc
+_TERMINAL_MODELS: dict[BeckhoffTerminalModel, tuple[type[BeckhoffChannel], int]] = {
+    BeckhoffTerminalModel.EL1034: (BeckhoffDigitalInput, 4),
+    BeckhoffTerminalModel.EL1124: (BeckhoffDigitalInput, 4),
+    BeckhoffTerminalModel.EL1808: (BeckhoffDigitalInput, 8),
+    BeckhoffTerminalModel.EL2124: (BeckhoffDigitalOutput, 4),
+    BeckhoffTerminalModel.EL2798: (BeckhoffRelayOutput, 8),
+    BeckhoffTerminalModel.EL2808: (BeckhoffDigitalOutput, 8),
+    BeckhoffTerminalModel.EL3008: (BeckhoffAnalogInput, 8),
+    BeckhoffTerminalModel.EL3068: (BeckhoffAnalogInput, 8),
+    BeckhoffTerminalModel.EL3154: (BeckhoffAnalogInput, 4),
+    BeckhoffTerminalModel.EL3164: (BeckhoffAnalogInput, 4),
+    BeckhoffTerminalModel.EL3314: (BeckhoffTempInput, 4),
+    BeckhoffTerminalModel.EL3318: (BeckhoffTempInput, 8),
+    BeckhoffTerminalModel.EL4008: (BeckhoffAnalogOutput, 8),
+    BeckhoffTerminalModel.EL4038: (BeckhoffAnalogOutput, 8),
+    BeckhoffTerminalModel.EL4104: (BeckhoffAnalogOutput, 4),
+    BeckhoffTerminalModel.EL4134: (BeckhoffAnalogOutput, 4),
+    BeckhoffTerminalModel.EL9505: (BeckhoffDigitalInput, 2),
 }
 
 
 class BeckhoffTerminal(StandardReadable):
     """A single Beckhoff EL terminal (slice) at a given position on the EK9000 bus."""
 
-    def __init__(self, prefix: str, model: str, name: str = ""):
-        if model not in BECKHOFF_TERMINAL_MODELS:
+    def __init__(self, prefix: str, model: BeckhoffTerminalModel | str, name: str = ""):
+        try:
+            self.model = BeckhoffTerminalModel(model)
+        except ValueError:
             raise ValueError(
                 f"Unsupported Beckhoff terminal model {model!r}. "
-                f"Supported models: {', '.join(BECKHOFF_TERMINAL_MODELS)}"
-            )
-        self.model = model
-        channel_cls, num_channels = BECKHOFF_TERMINAL_MODELS[model]
+                f"Supported models: {', '.join(BeckhoffTerminalModel)}"
+            ) from None
+        channel_cls, num_channels = _TERMINAL_MODELS[self.model]
         with self.add_children_as_readables():
             self.channels = DeviceVector(
                 {chan: channel_cls(prefix, chan) for chan in range(1, num_channels + 1)}
@@ -179,7 +202,7 @@ class BeckhoffEK9000Status(StandardReadable):
 
 
 def _normalize_terminals(
-    terminals: Mapping[int, str] | Iterable[Mapping[str, Any]],
+    terminals: Mapping[int, BeckhoffTerminalModel | str] | Iterable[Mapping[str, Any]],
 ) -> dict[int, str]:
     if isinstance(terminals, Mapping):
         return {int(pos): str(model) for pos, model in terminals.items()}
@@ -201,8 +224,9 @@ class BeckhoffGPIO(StandardReadable):
         The ``SYS`` portion of the PV prefix, e.g. ``"XF:31ID1-ES"``.
     dev : str
         The ``DEV`` portion of the PV prefix, e.g. ``"GPIO:1"``.
-    terminals : Mapping[int, str] | Iterable[Mapping[str, Any]]
-        Either a mapping of terminal position to model, e.g. ``{1: "EL3068", 2: "EL4008"}``,
+    terminals : Mapping[int, BeckhoffTerminalModel | str] | Iterable[Mapping[str, Any]]
+        Either a mapping of terminal position to model, e.g.
+        ``{1: BeckhoffTerminalModel.EL3068, 2: "EL4008"}``,
         or the ``terminals`` list from the ``nsls2.ioc_deploy`` elio IOC config,
         e.g. ``[{"POS": 1, "MODEL": "EL3068"}, {"POS": 2, "MODEL": "EL4008"}]``.
     name : str
@@ -215,7 +239,7 @@ class BeckhoffGPIO(StandardReadable):
         self,
         sys: str,
         dev: str,
-        terminals: Mapping[int, str] | Iterable[Mapping[str, Any]],
+        terminals: Mapping[int, BeckhoffTerminalModel | str] | Iterable[Mapping[str, Any]],
         name: str = "",
     ):
         with self.add_children_as_readables():

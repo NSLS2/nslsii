@@ -5,7 +5,8 @@ import pytest
 from bluesky.run_engine import call_in_bluesky_event_loop
 from ophyd_async.core import get_mock_put, init_devices, set_mock_value
 
-from nslsii.ophyd_async.devices import BeckhoffGPIO
+from nslsii.ophyd_async.devices import BeckhoffGPIO, BeckhoffTerminalModel
+from nslsii.ophyd_async.devices.beckhoff_gpio import _TERMINAL_MODELS
 
 IOC_CONFIG = {
     "type": "elio",
@@ -100,3 +101,14 @@ def test_channel_names_show_up_in_documents(RE):
     assert event["data"]["shutter_open"] is True
     assert "sample_temp" in descriptor["hints"]["gpio"]["fields"]
     assert "sample_temp-description" in descriptor["configuration"]["gpio"]["data_keys"]
+
+
+def test_every_terminal_model_has_a_channel_layout():
+    assert set(_TERMINAL_MODELS) == set(BeckhoffTerminalModel)
+
+
+@pytest.mark.parametrize("model", ["EL3068", BeckhoffTerminalModel.EL3068])
+def test_terminal_model_given_as_string_or_enum(model):
+    gpio = BeckhoffGPIO("XF:TEST", "GPIO:2", {1: model})
+    assert gpio.terminals[1].model is BeckhoffTerminalModel.EL3068
+    assert len(gpio.terminals[1].channels) == 8
