@@ -1,10 +1,13 @@
 import asyncio
+import threading
 
 import bluesky.plan_stubs as bps
 import pytest
 import pytest_asyncio
 from bluesky.protocols import Subscribable
-from bluesky.run_engine import RunEngine
+from bluesky.run_engine import RunEngine, call_in_bluesky_event_loop
+from bluesky.utils import RunEngineInterrupted
+from ophyd_async.epics.motor import Motor as AsyncEpicsMotor
 from ophyd_async.core import (
     WatchableAsyncStatus,
     callback_on_mock_put,
@@ -399,3 +402,134 @@ async def test_moving_blade_uses_its_setpoint(RE: RunEngine):
 
     assert location["setpoint"] == pytest.approx(2.0)  # (3 + 1) / 2, the commanded center
     assert location["readback"] == pytest.approx(0.0)
+
+
+def _pause_partway_through_first_move(
+    RE: RunEngine, blades: dict[AsyncEpicsMotor, float]
+) -> None:
+    """Make the first move of each of ``blades`` stop where given, on a pause.
+
+    The pause is requested once all are moving. Stopped, each ends up at rest with
+    setpoint and readback where it stopped, as the motor record leaves it.
+    """
+    moving: list[AsyncEpicsMotor] = []
+
+    def _setup(blade: AsyncEpicsMotor, stop_at: float):
+        released = asyncio.Event()
+        calls = 0
+
+        async def _move(value, **_):
+            nonlocal calls
+            calls += 1
+            if calls > 1:
+                set_mock_value(blade.user_readback, value)
+                return
+            set_mock_value(blade.motor_done_move, 0)
+            moving.append(blade)
+            if len(moving) == len(blades):
+                # From another thread, as a Ctrl-C pause is; it blocks on the RE loop
+                threading.Thread(target=RE.request_pause).start()
+            await released.wait()  # still moving until stopped
+            _park(blade, stop_at)
+            set_mock_value(blade.motor_done_move, 1)
+
+        callback_on_mock_put(blade.user_setpoint, _move)
+        callback_on_mock_put(blade.motor_stop, lambda *_, **__: released.set())
+
+    for blade, stop_at in blades.items():
+        _setup(blade, stop_at)
+
+
+@pytest.mark.parametrize("via", ["gap", "slits"])
+def test_replay_after_pause_finishes_the_commanded_move(RE: RunEngine, via: str):
+    slits = _re_slits((-1.0, 1.0, -1.0, 1.0))
+    for motor in _motors(slits):
+        set_mock_value(motor.deadband, 0.005)
+    # Gap 4 from (-1, 1) heads for (-2, 2); stopped at (-2, 1), centered on -0.5
+    _pause_partway_through_first_move(RE, {slits.inboard: -2.0, slits.outboard: 1.0})
+
+    def plan():
+        yield from bps.checkpoint()
+        if via == "gap":
+            yield from bps.mv(slits.horizontal_gap, 4.0)
+        else:
+            yield from bps.mv(slits, (4.0, 0.0, 2.0, 0.0))
+
+    with pytest.raises(RunEngineInterrupted):
+        RE(plan())
+    RE.resume()
+
+    # Gap 4 about the commanded center 0, not about -0.5 where the blades stopped
+    assert call_in_bluesky_event_loop(_blades(slits))[:2] == pytest.approx([-2.0, 2.0])
+
+
+def test_another_move_forgets_the_interrupted_one(RE: RunEngine):
+    slits = _re_slits((-1.0, 1.0, -1.0, 1.0))
+    for motor in _motors(slits):
+        set_mock_value(motor.deadband, 0.005)
+    # Gap 4 from (-1, 1) heads for (-2, 2); stopped at (-2, 1), centered on -0.5
+    _pause_partway_through_first_move(RE, {slits.inboard: -2.0, slits.outboard: 1.0})
+
+    with pytest.raises(RunEngineInterrupted):
+        RE(bps.mv(slits.horizontal_gap, 4.0))
+    RE.abort()
+
+    RE(bps.mv(slits.horizontal_center, 1.0))  # gap 3 from (-2, 1), now about center 1
+    RE(bps.mv(slits.horizontal_gap, 4.0))  # recomputed: about center 1, not the old 0
+
+    assert call_in_bluesky_event_loop(_blades(slits))[:2] == pytest.approx([-1.0, 3.0])
+
+
+@pytest.mark.parametrize(
+    "inboard_moved_to, expected",
+    [
+        (-3.0, [-3.0, 1.0]),  # moved: gap 4 computed afresh about the new center, -1
+        (-2.001, [-2.0, 2.0]),  # within the 5 um deadband: the commanded move resumes
+    ],
+)
+def test_blade_moved_directly_while_paused(
+    RE: RunEngine, inboard_moved_to: float, expected: list[float]
+):
+    slits = _re_slits((-1.0, 1.0, -1.0, 1.0))
+    for motor in _motors(slits):
+        set_mock_value(motor.deadband, 0.005)
+    _pause_partway_through_first_move(RE, {slits.inboard: -2.0, slits.outboard: 1.0})
+
+    def plan():
+        yield from bps.checkpoint()
+        yield from bps.mv(slits.horizontal_gap, 4.0)
+
+    with pytest.raises(RunEngineInterrupted):
+        RE(plan())
+
+    async def move_inboard_directly():
+        await slits.inboard.set(inboard_moved_to)
+
+    call_in_bluesky_event_loop(move_inboard_directly())
+    RE.resume()
+
+    assert call_in_bluesky_event_loop(_blades(slits))[:2] == pytest.approx(expected, abs=1e-6)
+
+
+@pytest.mark.parametrize("end", ["abort", "halt", "stop"])
+def test_ending_the_run_after_a_pause_forgets_the_interrupted_move(RE: RunEngine, end: str):
+    slits = _re_slits((-1.0, 1.0, -1.0, 1.0))
+    for motor in _motors(slits):
+        set_mock_value(motor.deadband, 0.005)
+    # Gap 4 from (-1, 1) heads for (-2, 2); stopped at (-2, 1), centered on -0.5
+    _pause_partway_through_first_move(RE, {slits.inboard: -2.0, slits.outboard: 1.0})
+
+    def plan():
+        yield from bps.checkpoint()
+        yield from bps.mv(slits.horizontal_gap, 4.0)
+
+    with pytest.raises(RunEngineInterrupted):
+        RE(plan())
+    try:
+        getattr(RE, end)()
+    except Exception:
+        pass  # abort and halt re-raise the interruption; stop doesn't
+
+    # A new plan's gap 4 is computed from where the blades are, not resumed
+    RE(bps.mv(slits.horizontal_gap, 4.0))
+    assert call_in_bluesky_event_loop(_blades(slits))[:2] == pytest.approx([-2.5, 1.5])

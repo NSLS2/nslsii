@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from dataclasses import dataclass
 
 import bluesky.plan_stubs as bps
 from bluesky.protocols import Callback, Locatable, Location, Subscribable
@@ -22,26 +23,32 @@ from ophyd_async.epics.motor import Motor as AsyncEpicsMotor
 logger = logging.getLogger(__name__)
 
 
+async def _tolerance(blade: AsyncEpicsMotor) -> float:
+    """A blade's positioning tolerance: its retry deadband (``.RDBD``), within which the
+    motor record stops correcting, or its resolution if larger."""
+    deadband, resolution = await asyncio.gather(
+        blade.deadband.get_value(), blade.motor_resolution.get_value()
+    )
+    return max(deadband, abs(resolution))
+
+
 async def _blade_position(blade: AsyncEpicsMotor) -> tuple[float, float]:
     """Return a blade's commanded position and its readback.
 
     The commanded position is the setpoint, unless the blade is at rest further from it
     than its positioning tolerance, e.g. after an IOC reboot restored a stale setpoint,
     or a position redefinition. Then the setpoint doesn't say where the blade is, so the
-    readback is used instead. The tolerance is the motor's retry deadband (``.RDBD``),
-    within which the motor record stops correcting, or its resolution if larger.
+    readback is used instead. The tolerance is given by `_tolerance`.
     """
-    setpoint, readback, done, deadband, resolution = await asyncio.gather(
+    setpoint, readback, done, tolerance = await asyncio.gather(
         blade.user_setpoint.get_value(),
         blade.user_readback.get_value(),
         blade.motor_done_move.get_value(),
-        blade.deadband.get_value(),
-        blade.motor_resolution.get_value(),
+        _tolerance(blade),
     )
     # While moving, the setpoint is where the blade is going, so build on that
     if not done:
         return setpoint, readback
-    tolerance = max(deadband, abs(resolution))
     if abs(setpoint - readback) <= tolerance:
         return setpoint, readback
     logger.warning(
@@ -49,6 +56,39 @@ async def _blade_position(blade: AsyncEpicsMotor) -> tuple[float, float]:
         f"setpoint {setpoint} (tolerance {tolerance}); using its readback"
     )
     return readback, readback
+
+
+@dataclass(frozen=True)
+class _BladePairMove:
+    """A gap or center move of a pair of blades stopped partway.
+
+    Holds its absolute blade targets, and the blades' readbacks where they stopped, to
+    tell whether they have been moved since.
+    """
+
+    axis: "_BladePairAxis"
+    value: float
+    low_target: float
+    high_target: float
+    low_readback: float
+    high_readback: float
+
+
+@dataclass
+class _BladePairState:
+    """Move state shared by the gap and the center of one pair of blades.
+
+    A move stopped partway, e.g. by a pause, is remembered with its absolute blade
+    targets, so a replay of it after resuming goes to the same targets. Recomputing them
+    would keep the center (or gap) where the blades stopped, not the one commanded.
+    """
+
+    #: Whether a gap or center move of the pair is in progress
+    moving: bool = False
+    #: Whether the move in progress was stopped
+    stopped: bool = False
+    #: The last move stopped partway, until the pair is next moved
+    interrupted_move: _BladePairMove | None = None
 
 
 class _BladePairAxis(
@@ -72,6 +112,9 @@ class _BladePairAxis(
         Units of the gap or center, as reported to watchers.
     precision : int
         Decimal places of the gap or center, as reported to watchers.
+    pair_state : _BladePairState, optional
+        State shared with the other axis of the same pair of blades, so a move of one
+        forgets an interrupted move of the other. `Slits` shares one per pair.
     """
 
     def __init__(
@@ -81,9 +124,11 @@ class _BladePairAxis(
         name: str = "",
         units: str = "mm",
         precision: int = 3,
+        pair_state: _BladePairState | None = None,
     ):
         # A tuple, so the blades are not adopted as children of this device
         self._blades = (low, high)
+        self._pair_state = pair_state if pair_state is not None else _BladePairState()
         self._units = units
         self._precision = precision
         with self.add_children_as_readables(Format.HINTED_SIGNAL):
@@ -152,30 +197,91 @@ class _BladePairAxis(
         real one. A warning is logged when that happens. Only the first move after such a
         mismatch uses the readback: that move writes a fresh setpoint for the blade, so
         later moves use setpoints again.
+
+        If the previous move of this pair of blades was this axis to the same ``value``
+        and it was stopped partway, e.g. by a pause, its absolute blade targets are
+        reused. A RunEngine replaying the move after resuming then finishes the move
+        originally commanded, rather than one recomputed around where the blades
+        stopped. Any other move of the pair through its gap or center forgets it, as does
+        either blade having moved further than its deadband from where it stopped, e.g. by
+        moving its motor directly while paused, or the run ending without resuming (an
+        abort, halt or stop after the pause); the move is then computed afresh.
         """
         low, high = self._blades
+        state = self._pair_state
         low_sp, high_sp, low_rb, high_rb = await self._positions()
-        low_target, high_target = self._backward(value, low_sp, high_sp)
+        interrupted = state.interrupted_move
+        if (
+            interrupted is not None
+            and interrupted.axis is self
+            and interrupted.value == value
+            and await self._still_where_stopped(interrupted, low_rb, high_rb)
+        ):
+            low_target, high_target = interrupted.low_target, interrupted.high_target
+        else:
+            low_target, high_target = self._backward(value, low_sp, high_sp)
         initial = self._forward(low_rb, high_rb)
 
         async def move_blades():
             await asyncio.gather(low.set(low_target), high.set(high_target))
 
-        move_status = AsyncStatus(move_blades())
-        async for current in observe_value(self.readback, done_status=move_status):
-            yield WatcherUpdate(
-                current=current,
-                initial=initial,
-                target=value,
-                name=self.name,
-                unit=self._units,
-                precision=self._precision,
-            )
-        # Re-raise a blade's failure; observe_value only stops when the move ends
-        await move_status
+        state.interrupted_move = None
+        state.moving = True
+        state.stopped = False
+        try:
+            move_status = AsyncStatus(move_blades())
+            async for current in observe_value(self.readback, done_status=move_status):
+                yield WatcherUpdate(
+                    current=current,
+                    initial=initial,
+                    target=value,
+                    name=self.name,
+                    unit=self._units,
+                    precision=self._precision,
+                )
+            # Re-raise a blade's failure; observe_value only stops when the move ends
+            await move_status
+        finally:
+            state.moving = False
+            if state.stopped:
+                low_stopped, high_stopped = await asyncio.gather(
+                    low.user_readback.get_value(), high.user_readback.get_value()
+                )
+                state.interrupted_move = _BladePairMove(
+                    self, value, low_target, high_target, low_stopped, high_stopped
+                )
+
+    async def _still_where_stopped(
+        self, move: _BladePairMove, low_readback: float, high_readback: float
+    ) -> bool:
+        """Whether both blades are within tolerance of where ``move`` stopped them."""
+        low_tolerance, high_tolerance = await asyncio.gather(
+            *(_tolerance(blade) for blade in self._blades)
+        )
+        if (
+            abs(low_readback - move.low_readback) <= low_tolerance
+            and abs(high_readback - move.high_readback) <= high_tolerance
+        ):
+            return True
+        logger.info(
+            f"{self.name}: blades moved since its move to {move.value} was stopped; "
+            "computing the move afresh instead of resuming it"
+        )
+        return False
 
     async def stop(self, success: bool = False):
-        """Stop both blades, so pausing or aborting the RunEngine stops a move."""
+        """Stop both blades, so pausing or aborting the RunEngine stops a move.
+
+        A move in progress is remembered as stopped partway, so replaying it reuses its
+        blade targets; see `set`. Called with no move in progress, it forgets any such
+        move instead: the RunEngine stops every device a plan moved when the run ends, so
+        after a pause that is then aborted, halted or stopped, rather than resumed, the
+        next move is computed afresh.
+        """
+        if self._pair_state.moving:
+            self._pair_state.stopped = True
+        else:
+            self._pair_state.interrupted_move = None
         await asyncio.gather(*(blade.stop(success=success) for blade in self._blades))
 
 
@@ -259,11 +365,14 @@ class Slits(
             self.bottom = AsyncEpicsMotor(vertical_prefix + "B}Mtr")
             self.top = AsyncEpicsMotor(vertical_prefix + "T}Mtr")
 
+        horizontal, vertical = _BladePairState(), _BladePairState()
         with self.add_children_as_readables(Format.CHILD):
-            self.horizontal_gap = SlitGap(self.inboard, self.outboard)
-            self.horizontal_center = SlitCenter(self.inboard, self.outboard)
-            self.vertical_gap = SlitGap(self.bottom, self.top)
-            self.vertical_center = SlitCenter(self.bottom, self.top)
+            self.horizontal_gap = SlitGap(self.inboard, self.outboard, pair_state=horizontal)
+            self.horizontal_center = SlitCenter(
+                self.inboard, self.outboard, pair_state=horizontal
+            )
+            self.vertical_gap = SlitGap(self.bottom, self.top, pair_state=vertical)
+            self.vertical_center = SlitCenter(self.bottom, self.top, pair_state=vertical)
 
         self._stopped = False
         super().__init__(name=name)
@@ -309,13 +418,15 @@ class Slits(
             yield update
 
     async def stop(self, success: bool = False):
-        """Stop all four blades, so pausing or aborting the RunEngine stops a move."""
+        """Stop all four blades, so pausing or aborting the RunEngine stops a move.
+
+        Stopping through the gaps marks any gap or center move in progress as stopped
+        partway, so replaying this set after a pause reuses its blade targets.
+        """
         self._stopped = True
         await asyncio.gather(
-            self.inboard.stop(success=success),
-            self.outboard.stop(success=success),
-            self.bottom.stop(success=success),
-            self.top.stop(success=success),
+            self.horizontal_gap.stop(success=success),
+            self.vertical_gap.stop(success=success),
         )
 
 
