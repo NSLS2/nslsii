@@ -1,6 +1,7 @@
 """ophyd-async slits with gap and center control of each pair of blades."""
 
 import asyncio
+import logging
 
 import bluesky.plan_stubs as bps
 from bluesky.protocols import Callback, Locatable, Location, Subscribable
@@ -17,6 +18,37 @@ from ophyd_async.core import (
 from ophyd_async.core import StandardReadableFormat as Format
 from ophyd_async.epics.core import EpicsDevice
 from ophyd_async.epics.motor import Motor as AsyncEpicsMotor
+
+logger = logging.getLogger(__name__)
+
+
+async def _blade_position(blade: AsyncEpicsMotor) -> tuple[float, float]:
+    """Return a blade's commanded position and its readback.
+
+    The commanded position is the setpoint, unless the blade is at rest further from it
+    than its positioning tolerance, e.g. after an IOC reboot restored a stale setpoint,
+    or a position redefinition. Then the setpoint doesn't say where the blade is, so the
+    readback is used instead. The tolerance is the motor's retry deadband (``.RDBD``),
+    within which the motor record stops correcting, or its resolution if larger.
+    """
+    setpoint, readback, done, deadband, resolution = await asyncio.gather(
+        blade.user_setpoint.get_value(),
+        blade.user_readback.get_value(),
+        blade.motor_done_move.get_value(),
+        blade.deadband.get_value(),
+        blade.motor_resolution.get_value(),
+    )
+    # While moving, the setpoint is where the blade is going, so build on that
+    if not done:
+        return setpoint, readback
+    tolerance = max(deadband, abs(resolution))
+    if abs(setpoint - readback) <= tolerance:
+        return setpoint, readback
+    logger.warning(
+        f"{blade.name} is at rest at {readback}, {abs(setpoint - readback)} from its "
+        f"setpoint {setpoint} (tolerance {tolerance}); using its readback"
+    )
+    return readback, readback
 
 
 class _BladePairAxis(
@@ -87,15 +119,19 @@ class _BladePairAxis(
         """Backward kinematics: blade targets that give ``value``."""
         raise NotImplementedError
 
-    async def locate(self) -> Location[float]:
-        """Return the setpoint and readback computed from both blades."""
-        low, high = self._blades
-        low_sp, high_sp, low_rb, high_rb = await asyncio.gather(
-            low.user_setpoint.get_value(),
-            high.user_setpoint.get_value(),
-            low.user_readback.get_value(),
-            high.user_readback.get_value(),
+    async def _positions(self) -> tuple[float, float, float, float]:
+        """The blades' commanded positions and readbacks, as (low, high, low, high)."""
+        (low_sp, low_rb), (high_sp, high_rb) = await asyncio.gather(
+            *(_blade_position(blade) for blade in self._blades)
         )
+        return low_sp, high_sp, low_rb, high_rb
+
+    async def locate(self) -> Location[float]:
+        """Return the setpoint and readback computed from both blades.
+
+        The setpoint is computed from each blade's commanded position, as `set` uses.
+        """
+        low_sp, high_sp, low_rb, high_rb = await self._positions()
         return Location(
             setpoint=self._forward(low_sp, high_sp),
             readback=self._forward(low_rb, high_rb),
@@ -103,12 +139,23 @@ class _BladePairAxis(
 
     @WatchableAsyncStatus.wrap
     async def set(self, value: float):
-        """Move both blades so the gap or center reaches ``value``."""
+        """Move both blades so the gap or center reaches ``value``.
+
+        The blade targets are computed from the blades' setpoints rather than their
+        readbacks, so the value that is kept (the center for a gap move, the gap for a
+        center move) is the one last commanded. Using readbacks would reset it to where
+        the blades happened to land each time, letting it drift by up to a deadband per
+        move, e.g. over a gap scan.
+
+        A blade at rest further from its setpoint than its deadband, e.g. after an IOC
+        reboot left a stale setpoint, uses its readback instead, so the kept value is the
+        real one. A warning is logged when that happens. Only the first move after such a
+        mismatch uses the readback: that move writes a fresh setpoint for the blade, so
+        later moves use setpoints again.
+        """
         low, high = self._blades
-        low_rb, high_rb = await asyncio.gather(
-            low.user_readback.get_value(), high.user_readback.get_value()
-        )
-        low_target, high_target = self._backward(value, low_rb, high_rb)
+        low_sp, high_sp, low_rb, high_rb = await self._positions()
+        low_target, high_target = self._backward(value, low_sp, high_sp)
         initial = self._forward(low_rb, high_rb)
 
         async def move_blades():
@@ -133,7 +180,7 @@ class _BladePairAxis(
 
 
 class SlitGap(_BladePairAxis):
-    """Separation between a pair of slit blades; setting it keeps the center."""
+    """Separation between a pair of slit blades; setting it keeps the commanded center."""
 
     @staticmethod
     def _forward(low: float, high: float) -> float:
@@ -146,7 +193,7 @@ class SlitGap(_BladePairAxis):
 
 
 class SlitCenter(_BladePairAxis):
-    """Midpoint of a pair of slit blades; setting it keeps the gap."""
+    """Midpoint of a pair of slit blades; setting it keeps the commanded gap."""
 
     @staticmethod
     def _forward(low: float, high: float) -> float:
@@ -170,7 +217,9 @@ class Slits(
 
     Exposes gap and center as movable :class:`SlitGap` and :class:`SlitCenter`
     devices for both the horizontal (inboard/outboard) and vertical (bottom/top)
-    axes. Setting a gap keeps the center fixed; setting a center keeps the gap fixed.
+    axes. Setting a gap keeps the commanded center fixed; setting a center keeps the
+    commanded gap fixed. Both are computed from the blade setpoints, so they don't drift
+    with the blades' positioning error over repeated moves.
 
     Parameters
     ----------

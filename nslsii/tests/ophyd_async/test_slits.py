@@ -35,6 +35,12 @@ _AXES = [
 ]
 
 
+def _park(motor, value: float) -> None:
+    """Put a mock motor at rest at ``value``: setpoint and readback agree."""
+    set_mock_value(motor.user_setpoint, value)
+    set_mock_value(motor.user_readback, value)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("axis, low, high, gap, center", _AXES)
 async def test_slits_gap_and_center_readback(
@@ -53,8 +59,8 @@ async def test_slits_set_gap_keeps_center(
     slits: Slits, axis: str, low: str, high: str, gap: str, center: str
 ):
     low_motor, high_motor = getattr(slits, low), getattr(slits, high)
-    set_mock_value(low_motor.user_readback, -1.0)
-    set_mock_value(high_motor.user_readback, 3.0)  # center 1.0, gap 4.0
+    _park(low_motor, -1.0)
+    _park(high_motor, 3.0)  # center 1.0, gap 4.0
 
     await getattr(slits, gap).set(10.0)
 
@@ -71,8 +77,8 @@ async def test_slits_set_center_keeps_gap(
     slits: Slits, axis: str, low: str, high: str, gap: str, center: str
 ):
     low_motor, high_motor = getattr(slits, low), getattr(slits, high)
-    set_mock_value(low_motor.user_readback, -1.0)
-    set_mock_value(high_motor.user_readback, 3.0)  # center 1.0, gap 4.0
+    _park(low_motor, -1.0)
+    _park(high_motor, 3.0)  # center 1.0, gap 4.0
 
     await getattr(slits, center).set(5.0)
 
@@ -318,3 +324,78 @@ def test_slits_pairs_can_have_their_own_prefixes():
 
     with pytest.raises(ValueError, match="horizontal_prefix and vertical_prefix"):
         Slits(horizontal_prefix="XF:TEST{Slt:H-Ax:")
+
+
+
+@pytest.mark.parametrize("axis, low, high, gap, center", _AXES)
+@pytest.mark.asyncio
+async def test_repeated_moves_keep_the_commanded_value_despite_positioning_error(
+    RE: RunEngine, axis: str, low: str, high: str, gap: str, center: str
+):
+    # Each blade lands a little off its setpoint, as a motor within its deadband might;
+    # different errors per blade, so neither the gap nor the center error cancels out
+    slits = _re_slits((-1.0, 1.0, -1.0, 1.0))
+    for motor in _motors(slits):
+        set_mock_value(motor.deadband, 0.005)
+    for motor, error in zip(_motors(slits), (0.001, 0.002, 0.001, 0.002), strict=True):
+        callback_on_mock_put(
+            motor.user_setpoint,
+            lambda value, motor=motor, error=error, **_: set_mock_value(
+                motor.user_readback, value + error
+            ),
+        )
+
+    def scan(axis_device, values):
+        for value in values:
+            yield from bps.mv(axis_device, value)
+
+    # A gap scan keeps the commanded center (0), and a center scan the commanded gap (2)
+    RE(scan(getattr(slits, gap), [2.0 + 0.1 * i for i in range(50)]))
+    low_sp = await getattr(slits, low).user_setpoint.get_value()
+    high_sp = await getattr(slits, high).user_setpoint.get_value()
+    assert (low_sp + high_sp) / 2 == pytest.approx(0.0, abs=1e-9)
+
+    RE(bps.mv(getattr(slits, gap), 2.0))
+    RE(scan(getattr(slits, center), [0.1 * i for i in range(50)]))
+    low_sp = await getattr(slits, low).user_setpoint.get_value()
+    high_sp = await getattr(slits, high).user_setpoint.get_value()
+    assert high_sp - low_sp == pytest.approx(2.0, abs=1e-9)
+
+
+
+@pytest.mark.parametrize("axis, low, high, gap, center", _AXES)
+@pytest.mark.asyncio
+async def test_stale_setpoints_fall_back_to_readbacks(
+    RE: RunEngine, caplog, axis: str, low: str, high: str, gap: str, center: str
+):
+    # As after an IOC reboot: blades really at -1 and 3 (center 1, gap 4), setpoints stale
+    slits = _re_slits((0.0, 0.0, 0.0, 0.0))
+    low_motor, high_motor = getattr(slits, low), getattr(slits, high)
+    for motor in (low_motor, high_motor):
+        set_mock_value(motor.deadband, 0.005)
+    set_mock_value(low_motor.user_readback, -1.0)
+    set_mock_value(high_motor.user_readback, 3.0)
+
+    location = await getattr(slits, gap).locate()
+    assert location["setpoint"] == pytest.approx(4.0)
+
+    with caplog.at_level("WARNING", logger="nslsii.ophyd_async.devices.slits"):
+        RE(bps.mv(getattr(slits, gap), 10.0))
+
+    # The real center (1) is kept, not the stale one (0)
+    assert await low_motor.user_readback.get_value() == pytest.approx(-4.0)
+    assert await high_motor.user_readback.get_value() == pytest.approx(6.0)
+    assert "using its readback" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_moving_blade_uses_its_setpoint(RE: RunEngine):
+    # The inboard blade is on its way to 3, so far from it but not at rest
+    slits = _re_slits((-1.0, 1.0, 0.0, 0.0))
+    set_mock_value(slits.inboard.user_setpoint, 3.0)
+    set_mock_value(slits.inboard.motor_done_move, 0)
+
+    location = await slits.horizontal_center.locate()
+
+    assert location["setpoint"] == pytest.approx(2.0)  # (3 + 1) / 2, the commanded center
+    assert location["readback"] == pytest.approx(0.0)
