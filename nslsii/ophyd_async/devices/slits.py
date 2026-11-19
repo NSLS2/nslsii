@@ -232,15 +232,16 @@ class Slits(
         value : tuple[tuple[float, float], tuple[float, float]]
             ((horizontal_gap, horizontal_center), (vertical_gap, vertical_center))
         """
-        if len(value) == 2 and all(len(v) == 2 for v in value):
+        try:
             (h_gap, h_center), (v_gap, v_center) = value
-        elif len(value) == 4:
-            h_gap, h_center, v_gap, v_center = value
-        else:
-            raise ValueError(
-                "Slit set value must be ((h_gap, h_center), (v_gap, v_center)) "
-                "or (h_gap, h_center, v_gap, v_center)"
-            )
+        except (TypeError, ValueError):
+            try:
+                h_gap, h_center, v_gap, v_center = value
+            except (TypeError, ValueError):
+                raise ValueError(
+                    "Slit set value must be ((h_gap, h_center), (v_gap, v_center)) "
+                    "or (h_gap, h_center, v_gap, v_center)"
+                ) from None
 
         # Set gaps first to preserve centers, then set centers to preserve gaps.
         self._stopped = False
@@ -277,7 +278,7 @@ def move_slits(
     vertical_gap: float | None = None,
     relative: bool = False,
 ):
-    """Move a pair of slit blades by their center line and gap.
+    """Move pair(s) of slit blades by their center line and gap.
 
     Only the values given move; the others stay where they are. A center move
     shifts both blades of the pair together, keeping the gap, and a gap move

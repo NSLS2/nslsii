@@ -194,7 +194,7 @@ class Shutter(
         self, value: bool | Literal[0, 1] | Literal["Open", "Closed"] | ShutterStatusT
     ) -> bool:
         """Whether ``value`` asks for the shutter to be open."""
-        # Status enum members are also strs, so match them before the strings. The
+        # Status enum members are also strs, so match them before the strings
         if isinstance(value, self._status_enum):
             return value == getattr(self._status_enum, "OPEN")
         elif isinstance(value, int) and value in (0, 1):
