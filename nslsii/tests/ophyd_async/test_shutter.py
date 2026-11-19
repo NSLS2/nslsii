@@ -237,7 +237,7 @@ def test_invalid_arguments(kwargs):
 
 
 @pytest.mark.asyncio
-async def test_shutter_is_readable():
+async def test_shutter_is_readable(RE: RunEngine):
     sh = _bare_shutter()
     set_mock_value(sh.enabled, True)
     assert (await sh.read())["sh-status"]["value"] == ShutterStatus.CLOSED
@@ -324,6 +324,7 @@ async def test_settle_time_waits_after_the_status_confirms(RE: RunEngine):
         (ShutterStatus.OPEN, ShutterStatus.OPEN),
         (False, ShutterStatus.CLOSED),
         (0, ShutterStatus.CLOSED),
+        ("Close", ShutterStatus.CLOSED),
         ("Closed", ShutterStatus.CLOSED),
         (ShutterStatus.CLOSED, ShutterStatus.CLOSED),
     ],
@@ -340,9 +341,82 @@ async def test_set_accepts_bools_ints_strings_and_enum_members(RE: RunEngine, va
     assert await sh.status.get_value() is expected
 
 
-@pytest.mark.parametrize("value", [2, "Close", "Not Open", "open", 1.0, None, _ValveStatus.OPEN])
+@pytest.mark.parametrize("value", [2, "Opened", "close", "Not Open", "open", 1.0, None, _ValveStatus.OPEN])
 @pytest.mark.asyncio
-async def test_set_rejects_other_values(value):
+async def test_set_rejects_other_values(RE: RunEngine, value):
     sh = _bare_shutter()
     with pytest.raises(ValueError, match="Can't set sh"):
         await sh.set(value)
+
+
+@pytest.mark.asyncio
+async def test_set_rejected_while_an_open_is_pending(RE: RunEngine):
+    sh = _bare_shutter()
+    opened = asyncio.Event()
+    closes: list[bool] = []
+    callback_on_mock_execute(sh.close_cmd, lambda *_: closes.append(True))
+
+    async def _slow_open(*_):
+        await opened.wait()
+        set_mock_value(sh.status, ShutterStatus.OPEN)
+
+    callback_on_mock_execute(sh.open_cmd, _slow_open)
+
+    opening = sh.set(True)
+    await asyncio.sleep(0.01)  # the open command is out, the status still reads CLOSED
+    assert await sh.status.get_value() is ShutterStatus.CLOSED
+    with pytest.raises(RuntimeError, match="in progress"):
+        await sh.set(False)
+    assert closes == []
+
+    opened.set()
+    await opening
+    assert await sh.status.get_value() is ShutterStatus.OPEN
+
+
+@pytest.mark.asyncio
+async def test_set_rejected_while_settling(RE: RunEngine):
+    sh = _bare_shutter(settle_time=0.2)
+    callback_on_mock_execute(
+        sh.open_cmd, lambda *_: set_mock_value(sh.status, ShutterStatus.OPEN)
+    )
+
+    opening = sh.set(True)
+    await asyncio.sleep(0.05)  # status already OPEN, still settling
+    assert await sh.status.get_value() is ShutterStatus.OPEN
+    with pytest.raises(RuntimeError, match="in progress"):
+        await sh.set(False)
+    await opening
+
+
+@pytest.mark.asyncio
+async def test_failed_or_invalid_set_releases_the_guard(RE: RunEngine, monkeypatch):
+    monkeypatch.setattr("nslsii.ophyd_async.devices.shutter.DEFAULT_TIMEOUT", 0.05)
+    sh = _bare_shutter()
+
+    with pytest.raises(TimeoutError):
+        await sh.set(True)  # the open command is never confirmed
+    with pytest.raises(ValueError):
+        await sh.set("Shut")
+
+    callback_on_mock_execute(
+        sh.open_cmd, lambda *_: set_mock_value(sh.status, ShutterStatus.OPEN)
+    )
+    await sh.set(True)
+    assert await sh.status.get_value() is ShutterStatus.OPEN
+
+
+@pytest.mark.asyncio
+async def test_subscribing_twice_is_cleared_by_one_clear_sub(RE: RunEngine):
+    sh = _bare_shutter()
+    received: list[dict[str, Reading[bool]]] = []
+
+    sh.subscribe_reading(received.append)
+    sh.subscribe_reading(received.append)
+    set_mock_value(sh.status, ShutterStatus.OPEN)
+    assert [r["sh"]["value"] for r in received].count(True) == 1  # delivered once
+
+    sh.clear_sub(received.append)
+    count = len(received)
+    set_mock_value(sh.status, ShutterStatus.CLOSED)
+    assert len(received) == count

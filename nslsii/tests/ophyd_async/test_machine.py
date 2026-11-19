@@ -5,19 +5,21 @@ from nslsii.ophyd_async.devices import NSLS2MasterShutterPermit, NSLS2OpsMode, N
 
 
 @pytest.mark.asyncio
-async def test_storage_ring_pvs_and_mock_defaults():
+@pytest.mark.parametrize("with_c03", [True, False])
+async def test_storage_ring_pvs_and_mock_defaults(with_c03: bool):
     async with init_devices(mock=True):
-        ring = NSLS2StorageRing()
+        ring = NSLS2StorageRing(read_c03_beam_current=with_c03)
 
     sources = {
         ring.operating_mode: "SR-OPS{}Mode-Sts",
         ring.master_shutter_permit: "SR-EPS{PLC:1}Sts:MstrSh-Sts",
         ring.beam_current: "SR:OPS-BI{DCCT:1}I:Real-I",
-        ring.beam_current_c03: "SR:C03-BI{DCCT:1}I:Real-I",
         ring.lifetime: "SR:OPS-BI{DCCT:1}Lifetime-I",
         ring.energy: "SR{}Energy_SRBend",
         ring.fill_target: "SR-HLA{}FillPattern:DesireImA",
     }
+    if with_c03:
+        sources[ring.beam_current_c03] = "SR:C03-BI{DCCT:1}I:Real-I"
     for signal, pv in sources.items():
         assert signal.source == f"mock+ca://{pv}"
 
@@ -26,9 +28,17 @@ async def test_storage_ring_pvs_and_mock_defaults():
     assert await ring.master_shutter_permit.get_value() == NSLS2MasterShutterPermit.ENABLE
 
     config = await ring.read_configuration()
-    assert set(config) == {
+    expected_config = {
+        "ring-operating_mode",
+    }
+    assert set(config) == {c for c in expected_config if c is not None}
+
+    config = await ring.read()
+    expected_reading = {
         "ring-beam_current",
         "ring-lifetime",
         "ring-energy",
         "ring-fill_target",
+        "ring-beam_current_c03" if with_c03 else None,
     }
+    assert set(config) == {c for c in expected_reading if c is not None}

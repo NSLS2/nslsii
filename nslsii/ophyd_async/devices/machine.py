@@ -49,6 +49,14 @@ class MockStorageRing(DeviceMock["NSLS2StorageRing"]):
 class NSLS2StorageRing(StandardReadable, EpicsDevice):
     """NSLS-II storage ring device.
 
+    Parameters
+    ----------
+    name : str, optional
+        The name of the device.
+    read_c03_beam_current : bool, optional
+        Whether to read the beam current from the DCCT in cell 3.
+        Defaults to False.
+
     Attributes
     ----------
     operating_mode : SignalR[NSLS2OpsMode]
@@ -57,7 +65,7 @@ class NSLS2StorageRing(StandardReadable, EpicsDevice):
         The beam current of the storage ring, in mA.
     beam_current_c03 : SignalR[float]
         The beam current from the DCCT in cell 3, in mA, which some beamlines use instead
-        of ``beam_current``.
+        of ``beam_current``. Only included in read/describe if read_c03_beam_current is True.
     lifetime : SignalR[float]
         The beam lifetime, in hours.
     energy : SignalR[float]
@@ -69,17 +77,24 @@ class NSLS2StorageRing(StandardReadable, EpicsDevice):
         ``NSLS2MasterShutterPermit.ENABLE`` when beamline shutters may be opened.
     """
 
-    def __init__(self, name: str = ""):
-        self.operating_mode = epics_signal_r(NSLS2OpsMode, "SR-OPS{}Mode-Sts")
+    def __init__(self, name: str = "", read_c03_beam_current: bool = False):
         self.master_shutter_permit = epics_signal_r(
             NSLS2MasterShutterPermit, "SR-EPS{PLC:1}Sts:MstrSh-Sts"
         )
-        self.beam_current_c03 = epics_signal_r(float, "SR:C03-BI{DCCT:1}I:Real-I")
+
         with self.add_children_as_readables(Format.CONFIG_SIGNAL):
+            self.operating_mode = epics_signal_r(NSLS2OpsMode, "SR-OPS{}Mode-Sts")
+
+        with self.add_children_as_readables():
             self.beam_current = epics_signal_r(float, "SR:OPS-BI{DCCT:1}I:Real-I")
             self.lifetime = epics_signal_r(float, "SR:OPS-BI{DCCT:1}Lifetime-I")
             self.energy = epics_signal_r(float, "SR{}Energy_SRBend")
             self.fill_target = epics_signal_r(float, "SR-HLA{}FillPattern:DesireImA")
+        
+        self.beam_current_c03 = epics_signal_r(float, "SR:C03-BI{DCCT:1}I:Real-I")
+        if read_c03_beam_current:
+            self.add_readables([self.beam_current_c03])
+
         super().__init__(name=name)
 
 

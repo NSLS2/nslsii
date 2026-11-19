@@ -65,7 +65,10 @@ class MockShutter(DeviceMock["Shutter"]):
 
 @default_mock_class(MockShutter)
 class Shutter(
-    StandardReadable, Subscribable[bool], AsyncMovable[bool | Literal[0, 1] | Literal["Open", "Closed"] | ShutterStatusT], Generic[ShutterStatusT]
+    StandardReadable,
+    Subscribable[bool],
+    AsyncMovable[bool | Literal[0, 1] | Literal["Open", "Close", "Closed"] | ShutterStatusT],
+    Generic[ShutterStatusT]
 ):
     """Two-button photon shutter or gate valve, opened and closed by separate command PVs.
 
@@ -147,6 +150,8 @@ class Shutter(
         self._retries = retries
         self._retry_period = retry_period
         self._status_enum = status_enum
+        # Set while a move, including its retries and settling, is in progress
+        self._moving = False
 
         with self.add_children_as_readables(Format.HINTED_SIGNAL):
             self.status = epics_signal_r(status_enum, f"{prefix}Pos-Sts")
@@ -165,7 +170,7 @@ class Shutter(
         super().__init__(name=name)
 
     @AsyncStatus.wrap
-    async def set(self, value: bool | Literal[0, 1] | Literal["Open", "Closed"] | ShutterStatusT):
+    async def set(self, value: bool | Literal[0, 1] | Literal["Open", "Close", "Closed"] | ShutterStatusT):
         """Open (True) or close (False) the shutter, and wait until the status confirms it.
 
         Nothing is sent if the shutter is already in the requested state. Otherwise,
@@ -173,25 +178,34 @@ class Shutter(
 
         Parameters
         ----------
-        value : bool | Literal[0, 1] | Literal["Open", "Closed"] | ShutterStatusT
+        value : bool | Literal[0, 1] | Literal["Open", "Close", "Closed"] | ShutterStatusT
             The desired state: ``True``, ``1``, ``"Open"`` or the status enum's ``OPEN``
-            member to open; ``False``, ``0``, ``"Closed"`` or ``CLOSED`` to close.
+            member to open; ``False``, ``0``, ``"Close"``, ``"Closed"`` or ``CLOSED`` to close.
 
         Raises
         ------
         ValueError
             If ``value`` is none of these, e.g. a member of a different status enum.
+        RuntimeError
+            If another move of this shutter is still in progress, including its retries
+            and settling, so a pending command can't override this one.
         """
-        should_open = self._should_open(value)
-        cmd = self.open_cmd if should_open else self.close_cmd
-        target = getattr(self._status_enum, "OPEN" if should_open else "CLOSED")
-        if await self.status.get_value() == target:
-            return
-        await self._actuate(cmd, target)
-        await asyncio.sleep(await self.settle_time.get_value())
+        if self._moving:
+            raise RuntimeError(f"Can't set {self.name} while a previous set is in progress")
+        self._moving = True
+        try:
+            should_open = self._should_open(value)
+            cmd = self.open_cmd if should_open else self.close_cmd
+            target = getattr(self._status_enum, "OPEN" if should_open else "CLOSED")
+            if await self.status.get_value() == target:
+                return
+            await self._actuate(cmd, target)
+            await asyncio.sleep(await self.settle_time.get_value())
+        finally:
+            self._moving = False
 
     def _should_open(
-        self, value: bool | Literal[0, 1] | Literal["Open", "Closed"] | ShutterStatusT
+        self, value: bool | Literal[0, 1] | Literal["Open", "Close", "Closed"] | ShutterStatusT
     ) -> bool:
         """Whether ``value`` asks for the shutter to be open."""
         # Status enum members are also strs, so match them before the strings
@@ -199,10 +213,10 @@ class Shutter(
             return value == getattr(self._status_enum, "OPEN")
         elif isinstance(value, int) and value in (0, 1):
             return bool(value)
-        elif value in ("Open", "Closed"):
+        elif value in ("Open", "Close", "Closed"):
             return value == "Open"
         raise ValueError(
-            f"Can't set {self.name} to {value!r}; expected True/False, 0/1, 'Open'/'Closed', "
+            f"Can't set {self.name} to {value!r}; expected True/False, 0/1, 'Open'/'Close'/'Closed', "
             f"or {self._status_enum.__name__}.OPEN/CLOSED"
         )
 
@@ -238,22 +252,26 @@ class Shutter(
         Parameters
         ----------
         function : Callable[[dict[str, Reading[bool]]], None]
-            A function to call with the new shutter status (as a dictionary of readings)
+            A function to call with the new shutter status (as a dictionary of readings).
+            Subscribing the same function again doesn't add a second subscription, as
+            with a signal, so one `clear_sub` removes it.
         """
+        translator = self._sub_translators.get(function)
+        if translator is None:
 
-        def _translate(readings: dict[str, Reading[ShutterStatusT]]) -> None:
-            """Translate readings from the status enum to bool."""
-            # The status signal emits a single reading; re-key it under the shutter.
-            translated: dict[str, Reading[bool]] = {}
-            for reading in readings.values():
-                translated[self.name] = {
-                    **reading,
-                    "value": reading["value"] == self._status_enum.OPEN,
-                }
-            function(translated)
+            def translator(readings: dict[str, Reading[ShutterStatusT]]) -> None:
+                """Translate readings from the status enum to bool."""
+                # The status signal emits a single reading; re-key it under the shutter.
+                translated: dict[str, Reading[bool]] = {}
+                for reading in readings.values():
+                    translated[self.name] = {
+                        **reading,
+                        "value": reading["value"] == self._status_enum.OPEN,
+                    }
+                function(translated)
 
-        self._sub_translators[function] = _translate
-        self.status.subscribe_reading(_translate)
+            self._sub_translators[function] = translator
+        self.status.subscribe_reading(translator)
 
     def clear_sub(self, function: Callable[[dict[str, Reading[bool]]], None]) -> None:
         """Remove a subscription previously passed to `subscribe_reading`.

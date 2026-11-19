@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from functools import partial
 from collections.abc import Callable, Iterable
 from bluesky import RunEngine
 from bluesky.suspenders import SuspendFloor
@@ -10,29 +11,7 @@ from bluesky.suspenders import SuspendFloor
 from nslsii.ophyd_async.devices.machine import NSLS2OpsMode, NSLS2StorageRing
 
 
-def _call_on_loop(loop, func: Callable[[], None]) -> None:
-    """Run ``func`` on the RunEngine's event loop and wait for it."""
-    if threading.get_ident() == getattr(loop, "_thread_id", None):
-        func()
-        return
-    done = threading.Event()
-    errors: list[BaseException] = []
-
-    def call():
-        try:
-            func()
-        except BaseException as err:
-            errors.append(err)
-        finally:
-            done.set()
-
-    loop.call_soon_threadsafe(call)
-    done.wait()
-    if errors:
-        raise errors[0]
-
-
-class SuspendFloorUnlessOpsMode(SuspendFloor):
+class BeamCurrentSuspender(SuspendFloor):
     """Suspend when the ring's beam current falls below a threshold, unless in a skipped ring mode.
 
     Install it whatever the ring's mode: the mode is checked every time the
@@ -49,6 +28,7 @@ class SuspendFloorUnlessOpsMode(SuspendFloor):
         Suspend if the beam current falls below this value, in mA.
     skip_modes : Iterable[NSLS2OpsMode]
         Modes in which a low beam current does not suspend the RunEngine.
+        Defaults to shutdown and maintenance.
     **kwargs
         Passed to `SuspendFloor` (``resume_thresh``, ``sleep``, ...).
     """
@@ -58,13 +38,17 @@ class SuspendFloorUnlessOpsMode(SuspendFloor):
         storage_ring: NSLS2StorageRing,
         suspend_thresh: float,
         *,
-        skip_modes: Iterable[NSLS2OpsMode],
+        use_c03_beam_current: bool = False,
+        skip_modes: Iterable[NSLS2OpsMode] = (NSLS2OpsMode.SHUTDOWN, NSLS2OpsMode.MAINTENANCE),
         **kwargs,
     ):
-        super().__init__(storage_ring.beam_current, suspend_thresh, **kwargs)
+        beam_current_signal = storage_ring.beam_current
+        if use_c03_beam_current:
+            beam_current_signal = storage_ring.beam_current_c03
+        super().__init__(beam_current_signal, suspend_thresh, **kwargs)
         self._ops_mode = storage_ring.operating_mode
         self._skip_modes = frozenset(skip_modes)
-        self._mode = None
+        self._mode: NSLS2OpsMode | None = None
         # The base _lock is not reentrant, and _set_mode calls back into __call__.
         self._eval_lock = threading.RLock()
 
@@ -85,7 +69,7 @@ class SuspendFloorUnlessOpsMode(SuspendFloor):
         with self._eval_lock:
             super().__call__(value, **kwargs)
 
-    def _set_mode(self, mode):
+    def _set_mode(self, mode: NSLS2OpsMode | None):
         with self._eval_lock:
             self._mode = mode
             if self._last_value is None:
@@ -95,21 +79,31 @@ class SuspendFloorUnlessOpsMode(SuspendFloor):
                 value = {self._sig.name: {"value": value}}
             self(value=value)
 
+    def _on_loop(self, RE: RunEngine, func: Callable[[], None]) -> None:
+        """Run ``func`` on the RunEngine's event loop and wait for it.
+
+        The operating mode needs its own subscription, since a suspender only
+        subscribes to one signal. This reuses the base class's (name-mangled)
+        ``__on_loop``, so it is made the same way as the beam current one.
+        """
+
+        # TODO: This is accessing the base class's name-mangled method directly.
+        # Consider providing a protected method in the base class to avoid this.
+        self._SuspenderBase__on_loop(RE, func)  # type: ignore
+
     def install(self, RE: RunEngine, *, event_type=None):
         # The mode first, so the first beam reading is judged against it.
-        _call_on_loop(
-            RE.loop, lambda: self._ops_mode.subscribe_reading(self._on_mode_reading)
-        )
+        self._on_loop(RE, partial(self._ops_mode.subscribe_reading, self._on_mode_reading))
         super().install(RE, event_type=event_type)
 
     def remove(self):
         # The base remove() clears self.RE, so take it first
-        RE = self.RE
+        RE = getattr(self, "RE", None)
+        if not isinstance(RE, RunEngine):
+            raise RuntimeError("No valid RunEngine found for removal.")
         super().remove()
         if RE is not None:
-            _call_on_loop(
-                RE.loop, lambda: self._ops_mode.clear_sub(self._on_mode_reading)
-            )
+            self._on_loop(RE, partial(self._ops_mode.clear_sub, self._on_mode_reading))
 
     def _get_justification(self):
         just = super()._get_justification()
