@@ -1,3 +1,17 @@
+from .beckhoff_gpio import (
+    BeckhoffAnalogInput,
+    BeckhoffAnalogOutput,
+    BeckhoffChannel,
+    BeckhoffChannelKind,
+    BeckhoffDigitalInput,
+    BeckhoffDigitalOutput,
+    BeckhoffEK9000Status,
+    BeckhoffGPIO,
+    BeckhoffRelayOutput,
+    BeckhoffTerminal,
+    BeckhoffTerminalModel,
+    BeckhoffTempInput,
+)
 from .motors import MotorizedStage, XYStage, XYZStage, XZStage, YZStage
 from .rbd9103 import (
     RBD9103,
@@ -26,6 +40,18 @@ from .xspress3 import (
 
 
 __all__ = [
+    "BeckhoffAnalogInput",
+    "BeckhoffAnalogOutput",
+    "BeckhoffChannel",
+    "BeckhoffChannelKind",
+    "BeckhoffDigitalInput",
+    "BeckhoffDigitalOutput",
+    "BeckhoffEK9000Status",
+    "BeckhoffGPIO",
+    "BeckhoffRelayOutput",
+    "BeckhoffTerminal",
+    "BeckhoffTerminalModel",
+    "BeckhoffTempInput",
     "MotorizedStage",
     "XYStage",
     "XYZStage",
