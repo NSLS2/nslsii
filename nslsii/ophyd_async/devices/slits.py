@@ -5,7 +5,7 @@ import logging
 from dataclasses import dataclass
 
 import bluesky.plan_stubs as bps
-from bluesky.protocols import Callback, Locatable, Location, Subscribable
+from bluesky.protocols import Callback, Locatable, Location, Pausable, Subscribable
 from ophyd_async.core import (
     AsyncMovable,
     AsyncStatus,
@@ -87,12 +87,43 @@ class _BladePairState:
     moving: bool = False
     #: Whether the move in progress was stopped
     stopped: bool = False
+    #: Whether a RunEngine pause or suspension has finished stopping devices since the
+    #: pair last moved, so a stopped move may be replayed on resuming
+    paused: bool = False
     #: The last move stopped partway, until the pair is next moved
     interrupted_move: _BladePairMove | None = None
 
+    def on_stop(self) -> None:
+        """Note a ``stop()`` of either axis of the pair.
+
+        On pausing or suspending, the RunEngine stops every device the plan moved, one
+        after another, then calls ``pause()``. Only a stop during a move does anything
+        then, so it doesn't matter in which order the gap and center are stopped. A stop
+        after ``pause()`` can only come from the run ending without resuming (an abort,
+        halt or stop), so the interrupted move is forgotten.
+        """
+        if self.paused:
+            self.paused = False
+            self.interrupted_move = None
+            # A move still finishing stopping must not be remembered either
+            self.stopped = False
+        elif self.moving:
+            self.stopped = True
+
+    def on_pause(self) -> None:
+        """Note the RunEngine has paused or suspended, after stopping devices."""
+        self.paused = True
+
+    def replayable(self, axis: "_BladePairAxis", value: float) -> _BladePairMove | None:
+        """The interrupted move, if a pause followed it and it is ``axis`` to ``value``."""
+        move = self.interrupted_move
+        if self.paused and move is not None and move.axis is axis and move.value == value:
+            return move
+        return None
+
 
 class _BladePairAxis(
-    StandardReadable, AsyncMovable[float], Locatable[float], Subscribable[float]
+    StandardReadable, AsyncMovable[float], Locatable[float], Subscribable[float], Pausable
 ):
     """A gap or center of a pair of slit blades, moved by moving both blades.
 
@@ -205,17 +236,15 @@ class _BladePairAxis(
         stopped. Any other move of the pair through its gap or center forgets it, as does
         either blade having moved further than its deadband from where it stopped, e.g. by
         moving its motor directly while paused, or the run ending without resuming (an
-        abort, halt or stop after the pause); the move is then computed afresh.
+        abort, halt or stop after the pause); the move is then computed afresh. A move
+        stopped without a pause, e.g. by an error ending the run, isn't replayed either.
         """
         low, high = self._blades
         state = self._pair_state
         low_sp, high_sp, low_rb, high_rb = await self._positions()
-        interrupted = state.interrupted_move
-        if (
-            interrupted is not None
-            and interrupted.axis is self
-            and interrupted.value == value
-            and await self._still_where_stopped(interrupted, low_rb, high_rb)
+        interrupted = state.replayable(self, value)
+        if interrupted is not None and await self._still_where_stopped(
+            interrupted, low_rb, high_rb
         ):
             low_target, high_target = interrupted.low_target, interrupted.high_target
         else:
@@ -226,6 +255,7 @@ class _BladePairAxis(
             await asyncio.gather(low.set(low_target), high.set(high_target))
 
         state.interrupted_move = None
+        state.paused = False
         state.moving = True
         state.stopped = False
         try:
@@ -272,17 +302,19 @@ class _BladePairAxis(
     async def stop(self, success: bool = False):
         """Stop both blades, so pausing or aborting the RunEngine stops a move.
 
-        A move in progress is remembered as stopped partway, so replaying it reuses its
-        blade targets; see `set`. Called with no move in progress, it forgets any such
-        move instead: the RunEngine stops every device a plan moved when the run ends, so
-        after a pause that is then aborted, halted or stopped, rather than resumed, the
-        next move is computed afresh.
+        A move in progress is remembered as stopped partway, so replaying it after the
+        RunEngine resumes reuses its blade targets; see `set`. A stop after the pause, as
+        when the run is aborted, halted or stopped instead of resumed, forgets it.
         """
-        if self._pair_state.moving:
-            self._pair_state.stopped = True
-        else:
-            self._pair_state.interrupted_move = None
+        self._pair_state.on_stop()
         await asyncio.gather(*(blade.stop(success=success) for blade in self._blades))
+
+    def pause(self) -> None:
+        """Called by the RunEngine on pausing or suspending, after stopping devices."""
+        self._pair_state.on_pause()
+
+    def resume(self) -> None:
+        """Called by the RunEngine on resuming; the replayed move reuses its targets."""
 
 
 class SlitGap(_BladePairAxis):
@@ -428,6 +460,14 @@ class Slits(
             self.horizontal_gap.stop(success=success),
             self.vertical_gap.stop(success=success),
         )
+
+    def pause(self) -> None:
+        """Called by the RunEngine on pausing or suspending, after stopping devices."""
+        self.horizontal_gap.pause()
+        self.vertical_gap.pause()
+
+    def resume(self) -> None:
+        """Called by the RunEngine on resuming; a replayed set reuses its targets."""
 
 
 def move_slits(
