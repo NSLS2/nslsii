@@ -32,7 +32,7 @@ class BeckhoffChannelKind(StrEnum):
     RELAY_OUTPUT = "Rly"
     ANALOG_INPUT = "AI"
     ANALOG_OUTPUT = "AO"
-    THERMOCOUPLE = "T"
+    TEMPERATURE = "T"  # Either thermocouple or RTD
 
 
 class BeckhoffChannel(StandardReadable):
@@ -91,8 +91,8 @@ class BeckhoffAnalogInput(BeckhoffChannel):
     value: SignalR[float]
 
 
-class BeckhoffThermocouple(BeckhoffAnalogInput):
-    _kind = BeckhoffChannelKind.THERMOCOUPLE
+class BeckhoffTempInput(BeckhoffAnalogInput):
+    _kind = BeckhoffChannelKind.TEMPERATURE
 
 
 class BeckhoffAnalogOutput(BeckhoffChannel, Movable[float]):
@@ -119,8 +119,8 @@ BECKHOFF_TERMINAL_MODELS: dict[str, tuple[type[BeckhoffChannel], int]] = {
     "EL3068": (BeckhoffAnalogInput, 8),
     "EL3154": (BeckhoffAnalogInput, 4),
     "EL3164": (BeckhoffAnalogInput, 4),
-    "EL3314": (BeckhoffThermocouple, 4),
-    "EL3318": (BeckhoffThermocouple, 8),
+    "EL3314": (BeckhoffTempInput, 4),
+    "EL3318": (BeckhoffTempInput, 8),
     "EL4008": (BeckhoffAnalogOutput, 8),
     "EL4038": (BeckhoffAnalogOutput, 8),
     "EL4104": (BeckhoffAnalogOutput, 4),
