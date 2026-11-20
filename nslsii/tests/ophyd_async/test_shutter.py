@@ -240,9 +240,12 @@ def test_invalid_arguments(kwargs):
 async def test_shutter_is_readable(RE: RunEngine):
     sh = _bare_shutter()
     set_mock_value(sh.enabled, True)
-    assert (await sh.read())["sh-status"]["value"] == ShutterStatus.CLOSED
+    reading = await sh.read()
+    assert set(reading) == {"sh"}
+    assert reading["sh"]["value"] is False
+    assert (await sh.describe())["sh"]["dtype"] == "boolean"
     assert (await sh.read_configuration())["sh-enabled"]["value"] is True
-    assert sh.hints == {"fields": ["sh-status"]}
+    assert sh.hints == {"fields": ["sh"]}
 
 
 class _ValveStatus(StrictEnum):
@@ -432,3 +435,28 @@ async def test_subscribing_twice_is_cleared_by_one_clear_sub(RE: RunEngine):
     count = len(received)
     set_mock_value(sh.status, ShutterStatus.CLOSED)
     assert len(received) == count
+
+
+
+def test_monitor_events_match_their_descriptor(RE: RunEngine):
+    sh = _bare_shutter()
+    callback_on_mock_execute(
+        sh.open_cmd, lambda *_: set_mock_value(sh.status, ShutterStatus.OPEN)
+    )
+    docs: list[tuple[str, dict]] = []
+
+    def plan():
+        yield from bps.open_run()
+        yield from bps.monitor(sh, name="shutter")
+        yield from bps.mv(sh, True)
+        yield from bps.unmonitor(sh)
+        yield from bps.close_run()
+
+    RE(plan(), lambda name, doc: docs.append((name, doc)))
+
+    (descriptor,) = [d for n, d in docs if n == "descriptor" and d["name"] == "shutter"]
+    events = [d for n, d in docs if n == "event" and d["descriptor"] == descriptor["uid"]]
+    assert [e["data"] for e in events] == [{"sh": False}, {"sh": True}]
+    for event in events:
+        assert set(event["data"]) == set(descriptor["data_keys"])
+    assert descriptor["data_keys"]["sh"]["dtype"] == "boolean"

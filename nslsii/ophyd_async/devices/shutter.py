@@ -18,6 +18,7 @@ from ophyd_async.core import (
     TriggerableCommand,
     callback_on_mock_execute,
     callback_on_mock_put,
+    derived_signal_r,
     default_mock_class,
     set_mock_value,
     soft_signal_rw,
@@ -106,8 +107,12 @@ class Shutter(
 
     Attributes
     ----------
+    is_open : SignalR[bool]
+        Whether the status reports the shutter open. This is the shutter's reading,
+        named after the shutter, and what `subscribe_reading` follows, so reads,
+        monitors and subscriptions all report the same bool.
     status : SignalR[ShutterStatusT]
-        Readback of the shutter position.
+        Readback of the shutter position, as the status enum. Not read itself.
     settle_time : SignalRW[float]
         Seconds to wait after the status confirms a move before the move completes,
         for shutters whose status changes before they have fully opened or closed.
@@ -156,8 +161,10 @@ class Shutter(
         self._idle = asyncio.Event()
         self._idle.set()
 
+        self.status = epics_signal_r(status_enum, f"{prefix}Pos-Sts")
+        # The shutter's one reading, so reads, monitors and subscriptions all agree
         with self.add_children_as_readables(Format.HINTED_SIGNAL):
-            self.status = epics_signal_r(status_enum, f"{prefix}Pos-Sts")
+            self.is_open = derived_signal_r(self._is_open, status=self.status)
         with self.add_children_as_readables(Format.CONFIG_SIGNAL):
             self.enabled = epics_signal_r(bool, f"{prefix}Enbl-Sts")
             self.settle_time = soft_signal_rw(float, initial_value=settle_time, units="s")
@@ -165,11 +172,6 @@ class Shutter(
         self.failed_to_close = epics_signal_r(bool, f"{prefix}Sts:FailCls-Sts")
         self.open_cmd = epics_triggerable_command(f"{prefix}Cmd:Opn-Cmd", cmd_value)
         self.close_cmd = epics_triggerable_command(f"{prefix}Cmd:Cls-Cmd", cmd_value)
-        # Maps a user callback to the status-signal wrapper registered for it.
-        self._sub_translators: dict[
-            Callable[[dict[str, Reading[bool]]], None],
-            Callable[[dict[str, Reading[ShutterStatusT]]], None],
-        ] = {}
         super().__init__(name=name)
 
     @AsyncStatus.wrap
@@ -256,34 +258,26 @@ class Shutter(
                     self._retries,
                 )
 
+    def _is_open(self, status: StrictEnum) -> bool:
+        return status == getattr(self._status_enum, "OPEN")
+
+    def set_name(self, name: str, *, child_name_separator: str | None = None) -> None:
+        """Name the ``is_open`` reading after the shutter, as a motor's readback is."""
+        super().set_name(name, child_name_separator=child_name_separator)
+        self.is_open.set_name(self.name)
+
     def subscribe_reading(
         self, function: Callable[[dict[str, Reading[bool]]], None]
     ) -> None:
-        """Subscribe to changes in the shutter status.
+        """Subscribe to whether the shutter is open, as read under the shutter's name.
 
         Parameters
         ----------
         function : Callable[[dict[str, Reading[bool]]], None]
-            A function to call with the new shutter status (as a dictionary of readings).
-            Subscribing the same function again doesn't add a second subscription, as
-            with a signal, so one `clear_sub` removes it.
+            A function to call with the new readings. Subscribing the same function
+            again doesn't add a second subscription, so one `clear_sub` removes it.
         """
-        translator = self._sub_translators.get(function)
-        if translator is None:
-
-            def translator(readings: dict[str, Reading[ShutterStatusT]]) -> None:
-                """Translate readings from the status enum to bool."""
-                # The status signal emits a single reading; re-key it under the shutter.
-                translated: dict[str, Reading[bool]] = {}
-                for reading in readings.values():
-                    translated[self.name] = {
-                        **reading,
-                        "value": reading["value"] == self._status_enum.OPEN,
-                    }
-                function(translated)
-
-            self._sub_translators[function] = translator
-        self.status.subscribe_reading(translator)
+        self.is_open.subscribe_reading(function)
 
     def clear_sub(self, function: Callable[[dict[str, Reading[bool]]], None]) -> None:
         """Remove a subscription previously passed to `subscribe_reading`.
@@ -293,8 +287,7 @@ class Shutter(
         function : Callable[[dict[str, Reading[bool]]], None]
             The callback to remove.
         """
-        translator = self._sub_translators.pop(function)
-        self.status.clear_sub(translator)
+        self.is_open.clear_sub(function)
 
 
 class MockInterlockAcknowledge(DeviceMock["InterlockAcknowledge"]):
