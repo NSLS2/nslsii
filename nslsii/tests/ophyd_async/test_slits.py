@@ -1,12 +1,16 @@
 import asyncio
 import threading
+import time
+from collections.abc import Callable
 
 import bluesky.plan_stubs as bps
 import pytest
 import pytest_asyncio
 from bluesky.protocols import Subscribable
 from bluesky.run_engine import RunEngine, call_in_bluesky_event_loop
-from bluesky.utils import RunEngineInterrupted
+from bluesky.suspenders import SuspendBoolHigh
+from bluesky.utils import FailedStatus, RunEngineInterrupted
+from ophyd import Signal
 from ophyd_async.epics.motor import Motor as AsyncEpicsMotor
 from ophyd_async.core import (
     WatchableAsyncStatus,
@@ -405,12 +409,15 @@ async def test_moving_blade_uses_its_setpoint(RE: RunEngine):
 
 
 def _stall_next_move(
-    blades: dict[AsyncEpicsMotor, float], RE: RunEngine | None = None
+    blades: dict[AsyncEpicsMotor, float],
+    RE: RunEngine | None = None,
+    on_moving: Callable[[], None] | None = None,
 ) -> None:
     """Make the next move of each of ``blades`` hang until stopped, then rest where given.
 
     Stopped, each ends up at rest with setpoint and readback where it stopped, as the
-    motor record leaves it. With ``RE``, a pause is requested once all are moving.
+    motor record leaves it. Once all are moving, ``on_moving`` is called, or with ``RE``
+    a pause is requested.
     """
     moving: list[AsyncEpicsMotor] = []
 
@@ -426,9 +433,12 @@ def _stall_next_move(
                 return
             set_mock_value(blade.motor_done_move, 0)
             moving.append(blade)
-            if RE is not None and len(moving) == len(blades):
-                # From another thread, as a Ctrl-C pause is; it blocks on the RE loop
-                threading.Thread(target=RE.request_pause).start()
+            if len(moving) == len(blades):
+                if on_moving is not None:
+                    on_moving()
+                elif RE is not None:
+                    # From another thread, as a Ctrl-C pause is; it blocks on the RE loop
+                    threading.Thread(target=RE.request_pause).start()
             await released.wait()  # still moving until stopped
             _park(blade, stop_at)
             set_mock_value(blade.motor_done_move, 1)
@@ -618,3 +628,84 @@ def test_move_stopped_without_a_pause_is_not_replayed(RE: RunEngine):
 
     # Computed afresh from where the blades are: about -0.5
     assert call_in_bluesky_event_loop(_blades(slits))[:2] == pytest.approx([-2.5, 1.5])
+
+
+def test_moving_gap_and_center_of_one_pair_together_is_refused(RE: RunEngine):
+    slits = _re_slits((-1.0, 1.0, -1.0, 1.0))
+
+    with pytest.raises(FailedStatus, match="another move of its blades is in progress"):
+        RE(bps.mv(slits.horizontal_gap, 4.0, slits.horizontal_center, 1.0))
+
+    # Refused before computing anything, so the guard doesn't outlive the failed move
+    RE(bps.mv(slits.horizontal_center, 1.0))
+    RE(bps.mv(slits.horizontal_gap, 4.0))
+    assert call_in_bluesky_event_loop(_blades(slits))[:2] == pytest.approx([-1.0, 3.0])
+
+
+def test_different_pairs_can_move_together(RE: RunEngine):
+    slits = _re_slits((-1.0, 1.0, -1.0, 1.0))
+
+    RE(bps.mv(slits.horizontal_gap, 4.0, slits.vertical_center, 1.0))
+
+    assert call_in_bluesky_event_loop(_blades(slits)) == pytest.approx([-2.0, 2.0, 0.0, 2.0])
+
+
+@pytest.mark.parametrize("suspensions", [1, 2, 3])
+def test_nested_suspensions_keep_the_interrupted_move(RE: RunEngine, suspensions: int):
+    # E.g. beam current drops (1st suspension), then the shutters close (2nd) before it
+    # clears; each suspension stops devices, then pauses them, and later resumes them
+    slits = _re_slits((-1.0, 1.0, -1.0, 1.0))
+    for motor in _motors(slits):
+        set_mock_value(motor.deadband, 0.005)
+    gap = slits.horizontal_gap
+
+    async def scenario():
+        # Gap 4 from (-1, 1) heads for (-2, 2); stopped at (-2, 1), centered on -0.5
+        _stall_next_move({slits.inboard: -2.0, slits.outboard: 1.0})
+        moving = gap.set(4.0)
+        await asyncio.sleep(0.01)
+        for i in range(suspensions):
+            await gap.stop(success=True)
+            if i == 0:
+                await moving
+            gap.pause()
+        for _ in range(suspensions):
+            gap.resume()
+        await gap.set(4.0)  # the replay
+
+    call_in_bluesky_event_loop(scenario())
+
+    assert call_in_bluesky_event_loop(_blades(slits))[:2] == pytest.approx([-2.0, 2.0])
+
+
+def test_replay_after_nested_suspensions(RE: RunEngine):
+    slits = _re_slits((-1.0, 1.0, -1.0, 1.0))
+    for motor in _motors(slits):
+        set_mock_value(motor.deadband, 0.005)
+    beam_lost, shutters_closed = Signal(name="beam_lost", value=0), Signal(
+        name="shutters_closed", value=0
+    )
+    for signal in (beam_lost, shutters_closed):
+        RE.install_suspender(SuspendBoolHigh(signal, sleep=0))
+
+    def trip_both_then_clear():
+        beam_lost.put(1)
+        time.sleep(0.3)  # suspended, waiting for the beam
+        shutters_closed.put(1)
+        time.sleep(0.3)
+        beam_lost.put(0)
+        shutters_closed.put(0)
+
+    # Gap 4 from (-1, 1) heads for (-2, 2); stopped at (-2, 1), centered on -0.5
+    _stall_next_move(
+        {slits.inboard: -2.0, slits.outboard: 1.0},
+        on_moving=lambda: threading.Thread(target=trip_both_then_clear).start(),
+    )
+
+    def plan():
+        yield from bps.checkpoint()
+        yield from bps.mv(slits.horizontal_gap, 4.0)
+
+    RE(plan())
+
+    assert call_in_bluesky_event_loop(_blades(slits))[:2] == pytest.approx([-2.0, 2.0])

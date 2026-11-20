@@ -90,6 +90,9 @@ class _BladePairState:
     #: Whether a RunEngine pause or suspension has finished stopping devices since the
     #: pair last moved, so a stopped move may be replayed on resuming
     paused: bool = False
+    #: Whether a stop came after the last pause with no pause since: the run ended
+    #: without resuming, unless another pause or suspension follows
+    stopped_after_pause: bool = False
     #: The last move stopped partway, until the pair is next moved
     interrupted_move: _BladePairMove | None = None
 
@@ -97,27 +100,37 @@ class _BladePairState:
         """Note a ``stop()`` of either axis of the pair.
 
         On pausing or suspending, the RunEngine stops every device the plan moved, one
-        after another, then calls ``pause()``. Only a stop during a move does anything
-        then, so it doesn't matter in which order the gap and center are stopped. A stop
-        after ``pause()`` can only come from the run ending without resuming (an abort,
-        halt or stop), so the interrupted move is forgotten.
+        after another, then calls ``pause()``. Only a stop during a move is recorded
+        then, so it doesn't matter in which order the gap and center are stopped.
+
+        A stop after ``pause()`` means either the run is ending without resuming (an
+        abort, halt or stop), or another suspension is starting while still suspended,
+        e.g. a second suspender tripping. Which one is only known from what follows: a
+        ``pause()`` for another suspension, or nothing as the run ends. So it is noted
+        rather than acted on, and blocks a replay unless another ``pause()`` follows.
         """
         if self.paused:
-            self.paused = False
-            self.interrupted_move = None
-            # A move still finishing stopping must not be remembered either
-            self.stopped = False
-        elif self.moving:
+            self.stopped_after_pause = True
+        if self.moving:
             self.stopped = True
 
     def on_pause(self) -> None:
         """Note the RunEngine has paused or suspended, after stopping devices."""
         self.paused = True
+        # Any stop since the last pause belonged to this pause, not to the run ending
+        self.stopped_after_pause = False
 
     def replayable(self, axis: "_BladePairAxis", value: float) -> _BladePairMove | None:
-        """The interrupted move, if a pause followed it and it is ``axis`` to ``value``."""
+        """The interrupted move, if it is ``axis`` to ``value`` and it was followed by a
+        pause, with no sign of the run having ended since."""
         move = self.interrupted_move
-        if self.paused and move is not None and move.axis is axis and move.value == value:
+        if (
+            self.paused
+            and not self.stopped_after_pause
+            and move is not None
+            and move.axis is axis
+            and move.value == value
+        ):
             return move
         return None
 
@@ -238,27 +251,44 @@ class _BladePairAxis(
         moving its motor directly while paused, or the run ending without resuming (an
         abort, halt or stop after the pause); the move is then computed afresh. A move
         stopped without a pause, e.g. by an error ending the run, isn't replayed either.
+
+        Raises
+        ------
+        RuntimeError
+            If the gap or center of the same pair of blades is already moving, e.g.
+            ``bps.mv(slits.horizontal_gap, 4, slits.horizontal_center, 1)``. Both would
+            drive the same blades at once; move them one after the other, or use
+            `Slits.set`, which sets the gaps and then the centers.
         """
         low, high = self._blades
         state = self._pair_state
-        low_sp, high_sp, low_rb, high_rb = await self._positions()
+        # Claim the pair before any await, so a concurrent move of it is refused here
+        if state.moving:
+            raise RuntimeError(
+                f"Can't move {self.name} while another move of its blades is in progress. "
+                "Move the gap and center of a pair one after the other, or use Slits.set."
+            )
         interrupted = state.replayable(self, value)
-        if interrupted is not None and await self._still_where_stopped(
-            interrupted, low_rb, high_rb
-        ):
-            low_target, high_target = interrupted.low_target, interrupted.high_target
-        else:
-            low_target, high_target = self._backward(value, low_sp, high_sp)
-        initial = self._forward(low_rb, high_rb)
-
-        async def move_blades():
-            await asyncio.gather(low.set(low_target), high.set(high_target))
-
         state.interrupted_move = None
         state.paused = False
+        state.stopped_after_pause = False
         state.moving = True
         state.stopped = False
+        low_target: float | None = None
+        high_target: float | None = None
         try:
+            low_sp, high_sp, low_rb, high_rb = await self._positions()
+            if interrupted is not None and await self._still_where_stopped(
+                interrupted, low_rb, high_rb
+            ):
+                low_target, high_target = interrupted.low_target, interrupted.high_target
+            else:
+                low_target, high_target = self._backward(value, low_sp, high_sp)
+            initial = self._forward(low_rb, high_rb)
+
+            async def move_blades():
+                await asyncio.gather(low.set(low_target), high.set(high_target))
+
             move_status = AsyncStatus(move_blades())
             async for current in observe_value(self.readback, done_status=move_status):
                 yield WatcherUpdate(
@@ -273,7 +303,8 @@ class _BladePairAxis(
             await move_status
         finally:
             state.moving = False
-            if state.stopped:
+            # Nothing to remember if stopped before the targets were worked out
+            if state.stopped and low_target is not None and high_target is not None:
                 low_stopped, high_stopped = await asyncio.gather(
                     low.user_readback.get_value(), high.user_readback.get_value()
                 )
