@@ -13,6 +13,7 @@ from bluesky.utils import FailedStatus, RunEngineInterrupted
 from ophyd import Signal
 from ophyd_async.epics.motor import Motor as AsyncEpicsMotor
 from ophyd_async.core import (
+    get_mock_put,
     WatchableAsyncStatus,
     callback_on_mock_put,
     init_devices,
@@ -707,5 +708,43 @@ def test_replay_after_nested_suspensions(RE: RunEngine):
         yield from bps.mv(slits.horizontal_gap, 4.0)
 
     RE(plan())
+
+    assert call_in_bluesky_event_loop(_blades(slits))[:2] == pytest.approx([-2.0, 2.0])
+
+
+@pytest.mark.parametrize("success", [True, False])
+def test_stop_before_the_blades_start_doesnt_start_them(RE: RunEngine, monkeypatch, success):
+    slits = _re_slits((-1.0, 1.0, -1.0, 1.0))
+    gap = slits.horizontal_gap
+    working_out_targets, release = asyncio.Event(), asyncio.Event()
+    positions = gap._positions
+
+    async def slow_positions():
+        working_out_targets.set()
+        await release.wait()
+        return await positions()
+
+    monkeypatch.setattr(gap, "_positions", slow_positions)
+
+    async def scenario():
+        status = gap.set(4.0)
+        await working_out_targets.wait()
+        await gap.stop(success=success)  # e.g. a pause, while the targets are worked out
+        release.set()
+        if success:
+            await status
+        else:
+            with pytest.raises(RuntimeError, match="was stopped"):
+                await status
+        for motor in (slits.inboard, slits.outboard):
+            assert not get_mock_put(motor.user_setpoint).called
+
+        # The stopped move is remembered, so resuming replays it
+        monkeypatch.setattr(gap, "_positions", positions)
+        gap.pause()
+        gap.resume()
+        await gap.set(4.0)
+
+    call_in_bluesky_event_loop(scenario())
 
     assert call_in_bluesky_event_loop(_blades(slits))[:2] == pytest.approx([-2.0, 2.0])

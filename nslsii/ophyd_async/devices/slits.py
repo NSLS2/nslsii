@@ -87,6 +87,8 @@ class _BladePairState:
     moving: bool = False
     #: Whether the move in progress was stopped
     stopped: bool = False
+    #: The ``success`` the move in progress was stopped with
+    stop_success: bool = True
     #: Whether a RunEngine pause or suspension has finished stopping devices since the
     #: pair last moved, so a stopped move may be replayed on resuming
     paused: bool = False
@@ -96,7 +98,7 @@ class _BladePairState:
     #: The last move stopped partway, until the pair is next moved
     interrupted_move: _BladePairMove | None = None
 
-    def on_stop(self) -> None:
+    def on_stop(self, success: bool = True) -> None:
         """Note a ``stop()`` of either axis of the pair.
 
         On pausing or suspending, the RunEngine stops every device the plan moved, one
@@ -113,6 +115,7 @@ class _BladePairState:
             self.stopped_after_pause = True
         if self.moving:
             self.stopped = True
+            self.stop_success = success
 
     def on_pause(self) -> None:
         """Note the RunEngine has paused or suspended, after stopping devices."""
@@ -274,6 +277,7 @@ class _BladePairAxis(
         state.stopped_after_pause = False
         state.moving = True
         state.stopped = False
+        state.stop_success = True
         low_target: float | None = None
         high_target: float | None = None
         try:
@@ -287,6 +291,13 @@ class _BladePairAxis(
             initial = self._forward(low_rb, high_rb)
 
             async def move_blades():
+                # Stopped while the targets were worked out: don't start the blades,
+                # and finish as a stopped move would. The targets are still remembered
+                # (see the finally below), so a replay after resuming makes this move.
+                if state.stopped:
+                    if not state.stop_success:
+                        raise RuntimeError(f"Device {self.name} was stopped.")
+                    return
                 await asyncio.gather(low.set(low_target), high.set(high_target))
 
             move_status = AsyncStatus(move_blades())
@@ -337,7 +348,7 @@ class _BladePairAxis(
         RunEngine resumes reuses its blade targets; see `set`. A stop after the pause, as
         when the run is aborted, halted or stopped instead of resumed, forgets it.
         """
-        self._pair_state.on_stop()
+        self._pair_state.on_stop(success)
         await asyncio.gather(*(blade.stop(success=success) for blade in self._blades))
 
     def pause(self) -> None:
