@@ -1,10 +1,24 @@
+from typing import Annotated
+
 import bluesky.plan_stubs as bps
 import pytest
 from bluesky.run_engine import call_in_bluesky_event_loop
 from ophyd_async.core import init_devices
 from ophyd_async.epics.motor import Motor
 
-from nslsii.ophyd_async.devices import MotorizedStage, XYStage, XYZStage, XZStage, YZStage
+from nslsii.ophyd_async.devices import (
+    AxisSuffix,
+    KBMirror,
+    MotorizedStage,
+    XYPitchRollYawStage,
+    XYStage,
+    XYThetaStage,
+    XYZPitchRollYawStage,
+    XYZStage,
+    XYZThetaStage,
+    XZStage,
+    YZStage,
+)
 
 PREFIX = "XF:31ID1-ES{Stg:1-Ax:"
 
@@ -19,6 +33,59 @@ def test_stage_axes_and_pv_names(stage_cls: type[MotorizedStage], axes: tuple[st
     for axis, motor in stage.axes.items():
         assert motor.user_readback.source == f"ca://{PREFIX}{axis.upper()}}}Mtr.RBV"
         assert motor.name == f"stage-{axis}"
+
+
+@pytest.mark.parametrize(
+    "stage_cls, pv_axes",
+    [
+        (XYThetaStage, {"x": "X", "y": "Y", "theta": "Th"}),
+        (XYZThetaStage, {"x": "X", "y": "Y", "z": "Z", "theta": "Th"}),
+        (XYPitchRollYawStage, {"x": "X", "y": "Y", "pitch": "P", "roll": "R", "yaw": "Yaw"}),
+        (
+            XYZPitchRollYawStage,
+            {"x": "X", "y": "Y", "z": "Z", "pitch": "P", "roll": "R", "yaw": "Yaw"},
+        ),
+    ],
+)
+def test_rotation_stage_default_pv_axes(stage_cls: type[MotorizedStage], pv_axes: dict[str, str]):
+    stage = stage_cls(PREFIX)
+    assert {axis: motor.user_setpoint.source for axis, motor in stage.axes.items()} == {
+        axis: f"ca://{PREFIX}{pv_axis}}}Mtr.VAL" for axis, pv_axis in pv_axes.items()
+    }
+
+
+def test_axis_suffixes_override_axis_suffix_annotation():
+    class RotStage(MotorizedStage):
+        phi: Annotated[Motor, AxisSuffix("Ph")]
+
+    assert RotStage(PREFIX).phi.user_setpoint.source == f"ca://{PREFIX}Ph}}Mtr.VAL"
+    stage = RotStage(PREFIX, axis_suffixes={"phi": "PhiA"})
+    assert stage.phi.user_setpoint.source == f"ca://{PREFIX}PhiA}}Mtr.VAL"
+
+
+@pytest.mark.parametrize("prefix", ["XF:17IDB-OP:AMX", "XF:17IDB-OP:AMX{Mir", "XF:17IDB-OP:AMX{Mir:"])
+def test_kb_mirror_default_pvs(prefix: str):
+    kb = KBMirror(prefix, name="kb")
+    assert tuple(kb.horizontal.axes) == tuple(kb.vertical.axes) == ("x", "y", "pitch")
+    assert kb.horizontal.pitch.user_setpoint.source == "ca://XF:17IDB-OP:AMX{Mir:KBH-Ax:P}Mtr.VAL"
+    assert kb.vertical.y.user_setpoint.source == "ca://XF:17IDB-OP:AMX{Mir:KBV-Ax:Y}Mtr.VAL"
+    assert kb.vertical.x.name == "kb-vertical-x"
+
+
+def test_kb_mirror_custom_layout():
+    class LegStage(MotorizedStage):
+        upstream: Annotated[Motor, AxisSuffix("YU")]
+        downstream: Annotated[Motor, AxisSuffix("YD")]
+
+    kb = KBMirror(
+        "XF:16IDA-OP",
+        vertical_cls=LegStage,
+        horizontal_id="KBH2",
+        horizontal_kwargs={"axis_suffixes": {"x": "XU"}},
+    )
+    assert isinstance(kb.vertical, LegStage)
+    assert kb.vertical.downstream.user_setpoint.source == "ca://XF:16IDA-OP{Mir:KBV-Ax:YD}Mtr.VAL"
+    assert kb.horizontal.x.user_setpoint.source == "ca://XF:16IDA-OP{Mir:KBH2-Ax:XU}Mtr.VAL"
 
 
 @pytest.mark.parametrize("prefix", ["XF:31ID1-ES{Stg:1", "XF:31ID1-ES{Stg:1-Ax:"])
@@ -68,6 +135,23 @@ def test_custom_motor_annotation_is_instantiated():
     assert stage.z.user_setpoint.source == f"ca://{PREFIX}Z}}Mtr.VAL"
     with pytest.raises(ValueError, match="Unknown axes"):
         CustomStage(PREFIX, axis_kwargs={"q": {}})
+
+
+def test_axis_kwargs_via_annotated():
+    class CustomMotor(Motor):
+        def __init__(self, prefix: str, name: str = "", *, gear_ratio: float = 1.0):
+            self.gear_ratio = gear_ratio
+            super().__init__(prefix, name=name)
+
+    class CustomStage(MotorizedStage):
+        y: Annotated[CustomMotor, {"gear_ratio": 3.0}]
+        z: Annotated[CustomMotor, {"gear_ratio": 4.0}]
+
+    stage = CustomStage(PREFIX, axis_kwargs={"z": {"gear_ratio": 5.0}})
+    assert tuple(stage.axes) == ("y", "z")
+    assert type(stage.y) is CustomMotor
+    assert stage.y.gear_ratio == 3.0
+    assert stage.z.gear_ratio == 5.0
 
 
 @pytest.mark.asyncio

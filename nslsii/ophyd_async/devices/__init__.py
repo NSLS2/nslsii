@@ -1,10 +1,23 @@
+from .motors import (
+    AxisSuffix,
+    KBMirror,
+    MotorizedStage,
+    XYPitchRollYawStage,
+    XYPitchStage,
+    XYStage,
+    XYThetaStage,
+    XYZPitchRollYawStage,
+    XYZStage,
+    XYZThetaStage,
+    XZStage,
+    YZStage,
+)
 from .machine import (
     MockStorageRing,
     NSLS2MasterShutterPermit,
     NSLS2OpsMode,
     NSLS2StorageRing,
 )
-from .motors import MotorizedStage, XYStage, XYZStage, XZStage, YZStage
 from .shutter import (
     InterlockAcknowledge,
     MockShutter,
@@ -40,6 +53,8 @@ from .xspress3 import (
 
 
 __all__ = [
+    "AxisSuffix",
+    "KBMirror",
     "InterlockAcknowledge",
     "MockShutter",
     "PPSShutter",
@@ -50,8 +65,13 @@ __all__ = [
     "NSLS2OpsMode",
     "NSLS2StorageRing",
     "MotorizedStage",
+    "XYPitchRollYawStage",
+    "XYPitchStage",
     "XYStage",
+    "XYThetaStage",
+    "XYZPitchRollYawStage",
     "XYZStage",
+    "XYZThetaStage",
     "XZStage",
     "YZStage",
     "SlitCenter",
