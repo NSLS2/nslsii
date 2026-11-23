@@ -1,3 +1,17 @@
+from .beckhoff_gpio import (
+    BeckhoffAnalogInput,
+    BeckhoffAnalogOutput,
+    BeckhoffChannel,
+    BeckhoffChannelKind,
+    BeckhoffDigitalInput,
+    BeckhoffDigitalOutput,
+    BeckhoffEK9000Status,
+    BeckhoffGPIO,
+    BeckhoffRelayOutput,
+    BeckhoffTerminal,
+    BeckhoffTerminalModel,
+    BeckhoffTempInput,
+)
 from .machine import (
     MockStorageRing,
     NSLS2MasterShutterPermit,
@@ -40,6 +54,18 @@ from .xspress3 import (
 
 
 __all__ = [
+    "BeckhoffAnalogInput",
+    "BeckhoffAnalogOutput",
+    "BeckhoffChannel",
+    "BeckhoffChannelKind",
+    "BeckhoffDigitalInput",
+    "BeckhoffDigitalOutput",
+    "BeckhoffEK9000Status",
+    "BeckhoffGPIO",
+    "BeckhoffRelayOutput",
+    "BeckhoffTerminal",
+    "BeckhoffTerminalModel",
+    "BeckhoffTempInput",
     "InterlockAcknowledge",
     "MockShutter",
     "PPSShutter",
