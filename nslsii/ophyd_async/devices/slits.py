@@ -412,12 +412,18 @@ class Slits(
         PV prefix of the inboard/outboard pair, if it differs from ``prefix``.
     vertical_prefix : str, optional
         PV prefix of the bottom/top pair, if it differs from ``prefix``.
+    inboard_prefix, outboard_prefix, bottom_prefix, top_prefix : str, optional
+        A blade's own motor record PV, e.g. ``"XF:31ID1-OP{Slt:1-Ax:I}Mtr"``, used as is
+        (nothing is appended), for blades whose PVs don't follow the naming above.
+
+    For each blade, the most specific prefix given is used: its own, then its pair's,
+    then ``prefix``.
 
     Raises
     ------
     ValueError
-        If a pair has no prefix, i.e. ``prefix`` is omitted without giving that
-        pair's own prefix.
+        If a blade has no prefix, i.e. none of ``prefix``, its pair's prefix or its own
+        prefix is given.
     """
 
     def __init__(
@@ -426,18 +432,40 @@ class Slits(
         name: str = "",
         horizontal_prefix: str | None = None,
         vertical_prefix: str | None = None,
+        inboard_prefix: str | None = None,
+        outboard_prefix: str | None = None,
+        bottom_prefix: str | None = None,
+        top_prefix: str | None = None,
     ):
-        horizontal_prefix = horizontal_prefix if horizontal_prefix is not None else prefix
-        vertical_prefix = vertical_prefix if vertical_prefix is not None else prefix
-        if horizontal_prefix is None or vertical_prefix is None:
+        if horizontal_prefix is None:
+            horizontal_prefix = prefix
+        if vertical_prefix is None:
+            vertical_prefix = prefix
+        blade_pvs = {
+            "inboard": (inboard_prefix, horizontal_prefix, "I}Mtr"),
+            "outboard": (outboard_prefix, horizontal_prefix, "O}Mtr"),
+            "bottom": (bottom_prefix, vertical_prefix, "B}Mtr"),
+            "top": (top_prefix, vertical_prefix, "T}Mtr"),
+        }
+        pvs: dict[str, str | None] = {}
+        for blade, (own, pair, suffix) in blade_pvs.items():
+            if own is not None:
+                pvs[blade] = own
+            elif pair is not None:
+                pvs[blade] = pair + suffix
+            else:
+                pvs[blade] = None
+        if missing := [blade for blade, pv in pvs.items() if pv is None]:
             raise ValueError(
-                "Give a prefix shared by all blades, or both horizontal_prefix and vertical_prefix."
+                f"No prefix for the {', '.join(missing)} blade(s). Give a prefix shared by "
+                "all blades, the horizontal_prefix and/or vertical_prefix of a pair, or "
+                "each blade's own prefix."
             )
         with self.add_children_as_readables(Format.CHILD):
-            self.inboard = AsyncEpicsMotor(horizontal_prefix + "I}Mtr")
-            self.outboard = AsyncEpicsMotor(horizontal_prefix + "O}Mtr")
-            self.bottom = AsyncEpicsMotor(vertical_prefix + "B}Mtr")
-            self.top = AsyncEpicsMotor(vertical_prefix + "T}Mtr")
+            self.inboard = AsyncEpicsMotor(pvs["inboard"])
+            self.outboard = AsyncEpicsMotor(pvs["outboard"])
+            self.bottom = AsyncEpicsMotor(pvs["bottom"])
+            self.top = AsyncEpicsMotor(pvs["top"])
 
         horizontal, vertical = _BladePairState(), _BladePairState()
         with self.add_children_as_readables(Format.CHILD):

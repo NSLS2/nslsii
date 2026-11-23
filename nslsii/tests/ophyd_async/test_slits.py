@@ -330,8 +330,31 @@ def test_slits_pairs_can_have_their_own_prefixes():
     assert slits.inboard.user_setpoint.source == "ca://XF:TEST{Slt:H-Ax:I}Mtr.VAL"
     assert slits.top.user_setpoint.source == "ca://XF:TEST{Slt:V-Ax:T}Mtr.VAL"
 
-    with pytest.raises(ValueError, match="horizontal_prefix and vertical_prefix"):
+    with pytest.raises(ValueError, match="bottom, top blade"):
         Slits(horizontal_prefix="XF:TEST{Slt:H-Ax:")
+
+
+def test_slits_blades_can_have_their_own_prefixes():
+    # A blade's own prefix wins over its pair's, which wins over the shared one
+    slits = Slits(
+        "XF:TEST{Slt:1-Ax:",
+        vertical_prefix="XF:TEST{Slt:2-Ax:",
+        outboard_prefix="XF:TEST{Slt:3-Ax:Out}Mtr",
+        top_prefix="XF:TEST{Slt:4-Ax:Up}Mtr",
+    )
+    assert slits.inboard.user_setpoint.source == "ca://XF:TEST{Slt:1-Ax:I}Mtr.VAL"
+    assert slits.outboard.user_setpoint.source == "ca://XF:TEST{Slt:3-Ax:Out}Mtr.VAL"
+    assert slits.bottom.user_setpoint.source == "ca://XF:TEST{Slt:2-Ax:B}Mtr.VAL"
+    assert slits.top.user_setpoint.source == "ca://XF:TEST{Slt:4-Ax:Up}Mtr.VAL"
+
+    # Every blade on its own, with no shared or pair prefix
+    blades = {blade: f"XF:TEST{{Slt:{blade}}}Mtr" for blade in ("inboard", "outboard", "bottom", "top")}
+    slits = Slits(**{f"{blade}_prefix": pv for blade, pv in blades.items()})
+    for blade, pv in blades.items():
+        assert getattr(slits, blade).user_setpoint.source == f"ca://{pv}.VAL"
+
+    with pytest.raises(ValueError, match="No prefix for the top blade"):
+        Slits(**{f"{blade}_prefix": pv for blade, pv in blades.items() if blade != "top"})
 
 
 
