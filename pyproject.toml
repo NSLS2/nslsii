@@ -21,7 +21,7 @@ classifiers = [
 dependencies = [
   "appdirs",
   "bluesky-kafka>=0.8.0",
-  "bluesky>=1.8.1",
+  "bluesky>=1.16",
   "caproto",
   "databroker",
   "h5py",

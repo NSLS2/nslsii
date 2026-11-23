@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from bluesky import RunEngine
     from IPython.core.interactiveshell import InteractiveShell
 
-LOGGER_NAMES = ("bluesky", "ophyd", "ophyd_async", "nslsii")
+LOGGER_NAMES = ("bluesky", "bluesky_tiled_plugins", "ophyd", "ophyd_async", "nslsii")
 DEFAULT_LOG_DIR = "/var/log/bluesky"
 
 # Logger of the Bluesky document lines. Each record carries the line's fields
@@ -199,14 +199,14 @@ def configure_bluesky_json_logging(
     log_events: bool = False,
 ) -> list[Path]:
     """
-    Write the log records at level INFO and above of the bluesky, ophyd,
-    ophyd_async, and nslsii loggers, of any ``extra_loggers``, and of
-    ``ipython.log`` if ``ipython`` is given, to a JSON-lines file for log
-    collectors such as Grafana Alloy. If ``RE`` is given, also write a summary
-    of each of its start, descriptor, event page, resource, stream resource,
-    and stop documents, and of its events if ``log_events``, to a second
-    JSON-lines file. Each stop line includes the run's number of events in
-    each stream.
+    Write the log records at level INFO and above of the bluesky,
+    bluesky_tiled_plugins, ophyd, ophyd_async, and nslsii loggers, of any
+    ``extra_loggers``, and of ``ipython.log`` if ``ipython`` is given, to a
+    JSON-lines file for log collectors such as Grafana Alloy. If ``RE`` is
+    given, also write a summary of each of its start, descriptor, event page,
+    resource, stream resource, and stop documents, and of its events if
+    ``log_events``, to a second JSON-lines file. Each stop line includes the
+    run's number of events in each stream.
 
     This is opt-in: ``configure_base`` does not call it. It is independent of
     ``configure_bluesky_logging`` and can be used with or without it.

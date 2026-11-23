@@ -12,6 +12,21 @@ from .motors import (
     XZStage,
     YZStage,
 )
+from .machine import (
+    MockStorageRing,
+    NSLS2MasterShutterPermit,
+    NSLS2OpsMode,
+    NSLS2StorageRing,
+)
+from .motors import MotorizedStage, XYStage, XYZStage, XZStage, YZStage
+from .shutter import (
+    InterlockAcknowledge,
+    MockShutter,
+    PPSShutter,
+    Shutter,
+    ShutterStatus,
+)
+from .slits import SlitCenter, SlitGap, Slits, move_slits
 from .rbd9103 import (
     RBD9103,
     RBD9103Range,
@@ -41,6 +56,15 @@ from .xspress3 import (
 __all__ = [
     "AxisSuffix",
     "KBMirror",
+    "InterlockAcknowledge",
+    "MockShutter",
+    "PPSShutter",
+    "Shutter",
+    "ShutterStatus",
+    "MockStorageRing",
+    "NSLS2MasterShutterPermit",
+    "NSLS2OpsMode",
+    "NSLS2StorageRing",
     "MotorizedStage",
     "XYPitchRollYawStage",
     "XYPitchStage",
@@ -51,6 +75,10 @@ __all__ = [
     "XYZThetaStage",
     "XZStage",
     "YZStage",
+    "SlitCenter",
+    "SlitGap",
+    "Slits",
+    "move_slits",
     "RBD9103",
     "RBD9103Range",
     "RBD9103Input",
