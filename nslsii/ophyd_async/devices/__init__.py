@@ -11,8 +11,21 @@ from .beckhoff_gpio import (
     BeckhoffTerminal,
     BeckhoffTerminalModel,
     BeckhoffTempInput,
+from .machine import (
+    MockStorageRing,
+    NSLS2MasterShutterPermit,
+    NSLS2OpsMode,
+    NSLS2StorageRing,
 )
 from .motors import MotorizedStage, XYStage, XYZStage, XZStage, YZStage
+from .shutter import (
+    InterlockAcknowledge,
+    MockShutter,
+    PPSShutter,
+    Shutter,
+    ShutterStatus,
+)
+from .slits import SlitCenter, SlitGap, Slits, move_slits
 from .rbd9103 import (
     RBD9103,
     RBD9103Range,
@@ -52,11 +65,24 @@ __all__ = [
     "BeckhoffTerminal",
     "BeckhoffTerminalModel",
     "BeckhoffTempInput",
+    "InterlockAcknowledge",
+    "MockShutter",
+    "PPSShutter",
+    "Shutter",
+    "ShutterStatus",
+    "MockStorageRing",
+    "NSLS2MasterShutterPermit",
+    "NSLS2OpsMode",
+    "NSLS2StorageRing",
     "MotorizedStage",
     "XYStage",
     "XYZStage",
     "XZStage",
     "YZStage",
+    "SlitCenter",
+    "SlitGap",
+    "Slits",
+    "move_slits",
     "RBD9103",
     "RBD9103Range",
     "RBD9103Input",
