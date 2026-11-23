@@ -11,6 +11,7 @@ from .beckhoff_gpio import (
     BeckhoffTerminal,
     BeckhoffTerminalModel,
     BeckhoffTempInput,
+)
 from .machine import (
     MockStorageRing,
     NSLS2MasterShutterPermit,
