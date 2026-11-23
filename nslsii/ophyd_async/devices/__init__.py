@@ -18,7 +18,6 @@ from .machine import (
     NSLS2OpsMode,
     NSLS2StorageRing,
 )
-from .motors import MotorizedStage, XYStage, XYZStage, XZStage, YZStage
 from .shutter import (
     InterlockAcknowledge,
     MockShutter,
