@@ -2,6 +2,25 @@
 Release History
 ***************
 
+v0.13.0 (2026-11-24)
+====================
+What's Changed
+..............
+* Trim the document log of ``configure_bluesky_json_logging``: datum, datum page, and stream datum documents are no longer summarized; events are summarized only with the new ``log_events=True`` keyword, and only their ``descriptor`` and ``seq_num``; each stop summary adds the run's ``num_events`` by `@thopkins32 <https://github.com/thopkins32>`_ in https://github.com/NSLS2/nslsii/pull/328
+* Ophyd-async multi-axis motor stages in ``nslsii.ophyd_async.devices``: ``MotorizedStage``, a base class that creates an EPICS ``Motor`` for each annotated axis following the NSLS-II PV naming convention and moves any subset of axes together, and ``XYStage``, ``XYZStage``, ``XZStage``, and ``YZStage`` by `@jwlodek <https://github.com/jwlodek>`_ in https://github.com/NSLS2/nslsii/pull/330
+* Write the ``bluesky_tiled_plugins`` logger, which includes the ``TiledWriter`` messages, to the JSON log of ``configure_bluesky_json_logging`` by `@thopkins32 <https://github.com/thopkins32>`_ in https://github.com/NSLS2/nslsii/pull/332
+* Ophyd-async devices in ``nslsii.ophyd_async.devices``: ``Slits``, whose horizontal and vertical gaps and centers are movable ``SlitGap`` and ``SlitCenter`` devices that finish an interrupted move when the RunEngine resumes, and the ``move_slits`` plan; ``Shutter`` and ``PPSShutter`` for two-button shutters and gate valves, with ``InterlockAcknowledge``; and ``NSLS2StorageRing``. Add ``nslsii.suspenders.BeamCurrentSuspender``, which suspends on low storage ring beam current except while the ring is in shutdown or maintenance, by `@jwlodek <https://github.com/jwlodek>`_ in https://github.com/NSLS2/nslsii/pull/331
+* More motor stages: ``XYThetaStage``, ``XYZThetaStage``, ``XYPitchStage``, ``XYPitchRollYawStage``, ``XYZPitchRollYawStage`` (e.g. hexapods), and ``KBMirror``; ``AxisSuffix`` in an axis's ``Annotated`` metadata sets its default PV axis component. ``Slits`` accepts a PV prefix for each blade pair (``horizontal_prefix``, ``vertical_prefix``) or blade, for slits split across controllers, by `@jwlodek <https://github.com/jwlodek>`_ in https://github.com/NSLS2/nslsii/pull/333
+* Add ``nslsii.configure_bluesky_tracing()``, which exports the OpenTelemetry spans of the process, such as those of RunEngine runs and messages and of ophyd ``Status`` objects, to an OTLP/HTTP collector configured by the standard ``OTEL_*`` environment variables. Adds the dependencies ``opentelemetry-sdk`` and ``opentelemetry-exporter-otlp-proto-http`` by `@thopkins32 <https://github.com/thopkins32>`_ in https://github.com/NSLS2/nslsii/pull/334
+
+**Breaking Changes**
+
+* The document log of ``configure_bluesky_json_logging`` no longer has datum, datum page, or stream datum lines, has event lines only with ``log_events=True``, and its event lines no longer include ``uid``. Update log queries and dashboards that use them (https://github.com/NSLS2/nslsii/pull/328)
+* Requires ``bluesky>=1.16``; v0.12.1 required ``bluesky>=1.8.1`` (https://github.com/NSLS2/nslsii/pull/331)
+
+**Full Changelog**: https://github.com/NSLS2/nslsii/compare/v0.12.1...v0.13.0
+
+
 v0.12.1 (2026-11-13)
 ====================
 What's Changed
