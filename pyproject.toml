@@ -34,6 +34,8 @@ dependencies = [
   "msgpack-numpy",
   "numpy",
   "opencv-python",
+  "opentelemetry-exporter-otlp-proto-http",
+  "opentelemetry-sdk",
   "ophyd",
   "ophyd-async[ca]>=0.21.4",
   "packaging",

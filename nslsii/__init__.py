@@ -10,6 +10,7 @@ import appdirs
 from IPython import get_ipython
 
 from ._json_log import configure_bluesky_json_logging
+from ._tracing import configure_bluesky_tracing
 from .utils import open_redis_client, git_info
 
 try:
