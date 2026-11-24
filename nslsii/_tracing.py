@@ -1,4 +1,4 @@
-"""OpenTelemetry traces of Bluesky sessions for trace backends such as Grafana Tempo."""
+"""OpenTelemetry traces of Bluesky sessions for trace backends."""
 
 
 def configure_bluesky_tracing() -> None:
@@ -6,10 +6,6 @@ def configure_bluesky_tracing() -> None:
     Export the OpenTelemetry spans of this process, such as those of bluesky's
     RunEngine runs and messages and of ophyd's Status objects, to an OTLP/HTTP
     endpoint.
-
-    This is opt-in: ``configure_base`` does not call it. Call it once per
-    process, before running plans; OpenTelemetry allows a single tracer
-    provider per process, so later calls only log a warning.
 
     It is configured entirely by the standard OpenTelemetry environment
     variables, for example:
