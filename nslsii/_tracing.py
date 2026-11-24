@@ -16,14 +16,14 @@ def configure_bluesky_tracing() -> None:
       ``http://localhost:4318``)
     - ``OTEL_TRACES_SAMPLER``: which traces to keep (default all)
     - ``OTEL_BSP_SCHEDULE_DELAY``: milliseconds between exports (default 5000)
+    - ``OTEL_EXPORTER_OTLP_TIMEOUT``: seconds to wait for the collector, which
+      also delays exit when it is unreachable (default 10)
     - ``OTEL_SDK_DISABLED=true``: record and export nothing
 
-    Spans are exported in batches by a background thread. A process that ends
-    with ``os._exit``, as a forked ``multiprocessing`` child such as the Queue
-    Server worker does, loses the spans not yet exported.
-
-    The RunEngine spans of a plan are in separate traces unless the plan is
-    wrapped with ``bluesky.tracing.trace_plan``, which makes them one trace.
+    Spans are exported in batches by a background thread, and the rest when
+    the interpreter exits. A ``multiprocessing`` child started by fork, such
+    as the Queue Server worker, exports the rest only on Python 3.13 and
+    later; on earlier versions they are lost when it exits.
     """
     # Imported here so that ``import nslsii`` does not pay for the SDK when tracing is not used.
     from opentelemetry import trace
