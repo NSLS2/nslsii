@@ -2,6 +2,15 @@
 Release History
 ***************
 
+v0.13.1 (2026-11-25)
+====================
+What's Changed
+..............
+* ``configure_bluesky_tracing`` labels spans with the service name ``bluesky`` when neither ``OTEL_SERVICE_NAME`` nor ``service.name`` in ``OTEL_RESOURCE_ATTRIBUTES`` is set (previously ``unknown_service:<executable>``, such as ``unknown_service:python``; update trace queries and dashboards that filter on it) by `@thopkins32 <https://github.com/thopkins32>`_ in https://github.com/NSLS2/nslsii/pull/336
+
+**Full Changelog**: https://github.com/NSLS2/nslsii/compare/v0.13.0...v0.13.1
+
+
 v0.13.0 (2026-11-24)
 ====================
 What's Changed
