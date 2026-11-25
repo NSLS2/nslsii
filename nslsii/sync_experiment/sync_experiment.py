@@ -1,5 +1,6 @@
 import argparse
 import importlib.metadata
+import logging
 import os
 import re
 import warnings
@@ -19,6 +20,8 @@ data_session_re = re.compile(r"^pass-(?P<proposal_number>\d+)$")
 nslsii_api_client = httpx.Client(base_url="https://api.nsls2.bnl.gov")
 
 from nslsii.utils import open_redis_client
+
+logger = logging.getLogger(__name__)
 
 
 def get_current_cycle() -> str:
@@ -95,7 +98,8 @@ config_files = [
 
 
 def authenticate(
-    username,
+    username: str,
+    password: str,
 ):
     config = None
     for fn in config_files:
@@ -121,20 +125,20 @@ def authenticate(
         connection = Connection(
             auth_server,
             user=f"BNL\\{username}",
-            password=getpass("Password : "),
+            password=password,
             authentication=NTLM,
             auto_bind=True,
             raise_exceptions=True,
         )
-        print(f"\nAuthenticated as : {connection.extend.standard.who_am_i()}")
+        logger.info(f"\nAuthenticated as : {connection.extend.standard.who_am_i()}")
 
     except LDAPInvalidCredentialsResult:
         raise RuntimeError(f"Invalid credentials for user '{username}'.") from None
     except LDAPSocketOpenError:
-        print(f"{server} server connection failed...")
+        logger.error(f"{server} server connection failed...")
 
 
-def should_they_be_here(username, new_data_session, beamline):
+def should_they_be_here(username: str, new_data_session: str, beamline: str) -> bool:
     user_access_json = nslsii_api_client.get(f"/v1/data-session/{username}").json()
 
     if "nsls2" in user_access_json["facility_all_access"]:
@@ -153,13 +157,12 @@ class AuthorizationError(Exception): ...
 
 
 def switch_redis_proposal(
-    proposal_number: Union[int, str],
+    proposal_number: int | str,
     beamline: str,
-    username: Optional[str] = None,
+    username: str | None = None,
     endstation: str = "",
     redis_db: int = 0,
     redis_ssl: bool = False,
-    verbose: bool = False,
 ) -> RedisJSONDict:
     """Update information in RedisJSONDict for a specific beamline
 
@@ -205,8 +208,7 @@ def switch_redis_proposal(
             redis_db=redis_db,
         )
         redis_prefix = endstation
-    if verbose:
-        print(f"Redis connection info: {redis_client.client().connection}")
+    logger.debug(f"Redis connection info: {redis_client.client().connection}")
 
     if redis_prefix and redis_ssl:
         raise ValueError(
@@ -262,22 +264,50 @@ def switch_redis_proposal(
             "pi_name": pi_name,
         }
 
-        print(f"Started experiment {md['data_session']} by {md['username']}.")
+        logger.info(f"Started experiment {md['data_session']} by {md['username']}.")
 
     return md
 
 
 def sync_experiment(
-    proposal_number,
-    beamline,
-    verbose=False,
-    endstation="",
+    proposal_number: int | str,
+    beamline: str,
+    username: str | None = None,
+    password: str | None = None,
+    endstation: str = "",
     redis_db: int = 0,
-    redis_ssl=False,
+    redis_ssl: bool = False,
 ):
-    # Authenticate the user
-    username = input("Username : ")
-    authenticate(username)
+    """
+    Synchronize the experiment metadata with the Redis database.
+
+    Parameters
+    ----------
+    proposal_number : int | str
+        The proposal number for the experiment.
+    beamline : str
+        The beamline where the experiment is conducted.
+    username : str | None, optional
+        The username of the person starting the experiment. If None, will prompt for input.
+    password : str | None, optional
+        The password for authentication. If None, will prompt for input.
+    verbose : bool, optional
+        If True, print detailed information.
+    endstation : str, optional
+        The beamline endstation for Redis lookup.
+    redis_db : int, optional
+        The Redis database index.
+    redis_ssl : bool, optional
+        Flag to enable SSL connection with Redis.
+
+    Returns
+    -------
+    dict
+        The experiment metadata.
+    """
+    username = input("Username : ") if username is None else username
+    password = getpass("Password : ") if password is None else password
+    authenticate(username, password)
 
     md = switch_redis_proposal(
         proposal_number,
@@ -286,11 +316,9 @@ def sync_experiment(
         endstation=endstation,
         redis_db=redis_db,
         redis_ssl=redis_ssl,
-        verbose=verbose,
     )
 
-    if verbose:
-        print(md)
+    logger.debug(md)
 
     return md
 
@@ -351,10 +379,17 @@ def main():
     parser.add_argument("-v", "--verbose", action=argparse.BooleanOptionalAction)
     args = parser.parse_args()
 
+    logging.basicConfig()
+    if args.verbose:
+        logger.setLevel(logging.DEBUG)
+    else:
+        logger.setLevel(logging.INFO)
+
     sync_experiment(
         proposal_number=args.proposal,
         beamline=args.beamline,
-        verbose=args.verbose,
+        username=None,
+        password=None,
         endstation=args.endstation,
         redis_db=args.redis_db,
         redis_ssl=args.redis_ssl,
