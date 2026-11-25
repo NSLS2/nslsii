@@ -1,5 +1,7 @@
 """OpenTelemetry traces of Bluesky sessions for trace backends."""
 
+import os
+
 
 def configure_bluesky_tracing() -> None:
     """
@@ -31,6 +33,9 @@ def configure_bluesky_tracing() -> None:
     from opentelemetry.sdk.resources import Resource
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+    if "OTEL_SERVICE_NAME" not in os.environ:
+        os.environ["OTEL_SERVICE_NAME"] = "bluesky"
 
     provider = TracerProvider(resource=Resource.create())
     provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
