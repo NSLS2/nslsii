@@ -1,7 +1,5 @@
 """OpenTelemetry traces of Bluesky sessions for trace backends."""
 
-import os
-
 
 def configure_bluesky_tracing() -> None:
     """
@@ -13,7 +11,8 @@ def configure_bluesky_tracing() -> None:
     variables, for example:
 
     - ``OTEL_SERVICE_NAME`` and ``OTEL_RESOURCE_ATTRIBUTES``: attributes of
-      every span, such as the beamline
+      every span, such as the beamline; the service name defaults to
+      ``bluesky``
     - ``OTEL_EXPORTER_OTLP_ENDPOINT``: the collector (default
       ``http://localhost:4318``)
     - ``OTEL_TRACES_SAMPLER``: which traces to keep (default all)
@@ -30,13 +29,14 @@ def configure_bluesky_tracing() -> None:
     # Imported here so that ``import nslsii`` does not pay for the SDK when tracing is not used.
     from opentelemetry import trace
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.resources import SERVICE_NAME, OTELResourceDetector, Resource
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-    if "OTEL_SERVICE_NAME" not in os.environ:
-        os.environ["OTEL_SERVICE_NAME"] = "bluesky"
+    resource = Resource.create()
+    if SERVICE_NAME not in OTELResourceDetector().detect().attributes:
+        resource = resource.merge(Resource({SERVICE_NAME: "bluesky"}))
 
-    provider = TracerProvider(resource=Resource.create())
+    provider = TracerProvider(resource=resource)
     provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
     trace.set_tracer_provider(provider)
