@@ -61,3 +61,29 @@ def make_filename_add_subdirectory(fn, read_path, write_path, *,
     if make_directories:
         makedirs(read_path)
     return fn, read_path, write_path
+
+
+def warmup_hdf5_plugins(detectors):
+    """Warm-up the hdf5 plugins for a list of detectors.
+
+    This is necessary for when the corresponding IOC restarts, we have to
+    trigger one image for the hdf5 plugin to work correctly, else we get file
+    writing errors.
+
+    Parameters:
+    -----------
+    detectors : list
+        a list of detector ophyd objects which have the .hdf5 plugins
+    """
+    for det in detectors:
+        if hasattr(det, "hdf5"):
+            _array_size = det.hdf5.array_size.get()
+            if 0 in [_array_size.height, _array_size.width]:
+                print(f"\n  Warming up HDF5 plugin for {det.name} as the "
+                      f"array_size={_array_size}...")
+                det.hdf5.warmup()
+                print(f"  Warming up HDF5 plugin for {det.name} is done. "
+                      f"array_size={det.hdf5.array_size.get()}\n")
+            else:
+                print(f"\n  Warming up of the HDF5 plugin is not needed for "
+                      f"{det.name} as the array_size={_array_size}.")
