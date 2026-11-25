@@ -97,7 +97,7 @@ class TwoButtonShutter(Device):
 
         return st
 
-    def stop(self, *, success=False):
+    def pause(self):
         import time
         prev_st = self._set_st
         if prev_st is not None:
@@ -123,7 +123,7 @@ class TwoButtonShutter(Device):
         self._was_open = False
         return super().unstage()
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, close_on_pause=True, close_on_stop=True, **kwargs):
         self._was_open = False
         super().__init__(*args, **kwargs)
         self._set_st = None
